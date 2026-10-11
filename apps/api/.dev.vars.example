@@ -1,0 +1,29 @@
+# Copy to .dev.vars locally. Never commit .dev.vars or real service credentials.
+SUPABASE_URL="https://YOUR_PROJECT.supabase.co"
+SUPABASE_ANON_KEY="YOUR_PUBLIC_ANON_KEY"
+SUPABASE_SERVICE_ROLE_KEY="YOUR_SERVER_ONLY_SERVICE_ROLE_KEY"
+APP_ORIGIN="http://localhost:3000"
+
+# Operational admission switches. Existing accounts/images remain readable.
+# Also disable new signups in Supabase Auth settings when pausing registration.
+SIGNUPS_ENABLED="true"
+UPLOADS_ENABLED="true"
+
+# Unset credentials/models/prices disable paid AI and use deterministic rules.
+# Enable only after inserting an ai_enabled service_budget row for the JST month.
+# Verify the selected model's current official prices and set a conservative
+# reservation above expected request cost. These are USD per 1 million tokens.
+OPENAI_API_KEY=""
+AI_MODEL_CLASSIFY=""
+AI_MODEL_OUTFIT=""
+AI_REQUEST_RESERVE_USD=""
+AI_INPUT_USD_PER_MILLION=""
+AI_OUTPUT_USD_PER_MILLION=""
+
+# Optional: 3-day service by default; set 7 only for a plan covering 7 days.
+# Dates beyond the purchased horizon use explicitly marked seasonal estimates.
+WEATHER_API_KEY=""
+WEATHER_FORECAST_DAYS="3"
+
+# CLOTHES_BUCKET is a private R2 binding in wrangler.jsonc, not a URL or secret.
+# Set production secrets with wrangler secret put; never NEXT_PUBLIC_*.

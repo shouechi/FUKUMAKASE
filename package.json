@@ -1,0 +1,31 @@
+{
+  "name": "fukumakase",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@11.13.0",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @outfit/web --filter @outfit/api dev",
+    "build": "pnpm --filter @outfit/web build",
+    "build:worker": "pnpm --filter @outfit/web build:worker",
+    "typecheck": "pnpm -r typecheck && pnpm test:contracts",
+    "test:contracts": "tsc -p tests/tsconfig.contracts.json",
+    "test": "vitest run",
+    "test:db": "node tests/database/run.mjs",
+    "test:e2e": "playwright test",
+    "format": "prettier --write apps packages tests *.json *.ts *.yaml",
+    "check": "pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.0",
+    "@types/node": "^22.19.19",
+    "@types/pg": "^8.15.0",
+    "pg": "^8.16.0",
+    "prettier": "^3.9.9",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
+  }
+}

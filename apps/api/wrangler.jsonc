@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fukumakase-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": false },
+  "triggers": { "crons": ["*/10 * * * *"] },
+  "r2_buckets": [
+    {
+      "binding": "CLOTHES_BUCKET",
+      "bucket_name": "fukumakase-private-clothes",
+    },
+  ],
+  "vars": { "UPLOADS_ENABLED": "true", "WEATHER_FORECAST_DAYS": "3" },
+}

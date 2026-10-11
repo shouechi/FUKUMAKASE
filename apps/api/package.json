@@ -1,0 +1,22 @@
+{
+  "name": "@outfit/api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@outfit/schemas": "workspace:*",
+    "@outfit/domain": "workspace:*",
+    "@supabase/supabase-js": "^2.95.0",
+    "hono": "^4.11.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261006.1",
+    "wrangler": "^4.63.0",
+    "typescript": "^5.9.3"
+  }
+}
