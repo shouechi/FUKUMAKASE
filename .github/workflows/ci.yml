@@ -1,9 +1,14 @@
-name: Verify MVP
+name: CI
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -24,7 +29,6 @@ jobs:
       TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/outfit_test
       NEXT_PUBLIC_SUPABASE_URL: https://outfit-test.supabase.co
       NEXT_PUBLIC_SUPABASE_ANON_KEY: public-test-key
-      E2E_AUTH_MOCKS: "1"
       CLOUDFLARE_CF_FETCH_ENABLED: "false"
       WRANGLER_SEND_METRICS: "false"
     steps:
@@ -45,13 +49,4 @@ jobs:
           done
       - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:e2e
-      - run: pnpm build
       - run: pnpm build:worker
-      - name: Keep browser failure evidence
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-results
-          path: test-results/

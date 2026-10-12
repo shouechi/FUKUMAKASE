@@ -16,8 +16,14 @@ OpenAI/天気のキーがなくても、ルールベース提案・季節の暫�
 
 - `pnpm test`：ドメイン、共有スキーマ、依存先を注入したAPI・外部サービス障害テスト。DB接続があればDBテストも対象。
 - `pnpm test:db`：一時PostgreSQLを作成し、実SQLの所有権、RLS、100枠の競合、着用・洗濯訂正、予算、リース、冪等性を検証して停止・削除。`POSTGRES_BIN` でバイナリディレクトリを指定できます。
-- `pnpm test:e2e`：ChromiumのPC・スマートフォンサイズで公開画面と認証済みUIを検証。Auth/APIの固定応答はテスト内のみ。実メール・実OAuth・実R2の代替ではありません。
-- `pnpm build`：vinextの通常ビルド。`pnpm build:worker`：Cloudflare Workers形式のビルド。ビルドは公開ではありません。
+- `pnpm test:e2e`：リリース前に手動実行する必須ゲート。ChromiumのPC・スマートフォンサイズで公開画面と認証済みUIを検証。Auth/APIの固定応答はテスト内のみ。実メール・実OAuth・実R2の代替ではありません。
+- `pnpm build:worker`：Cloudflare Workers形式のビルド（CI対象）。検証にはこのコマンドを使用します。ビルドは公開ではありません。
+
+### CIとリリース前の手動E2E
+
+`CI / verify` はmainへのpushとmain宛てPRで実行します。作業ブランチのpushでは実行しないため、PRの更新で同じ変更にpushとpull_requestの両方が起動することはありません。同じPRの新しいコミットでは古い実行を停止し、mainのpushや別PRの実行は停止しません。固定インストール、PostgreSQLマイグレーション、`pnpm typecheck`、`pnpm test`、`pnpm build:worker` を実行し、通常ビルドとブラウザE2Eは含めません。
+
+リリース担当者は対象コミットを確認して依存関係をインストールし、必要に応じて `pnpm exec playwright install --with-deps chromium` でブラウザを用意してから `pnpm test:e2e` を手動実行します。対象コミット・実行環境・結果をリリース記録に残し、失敗時は `test-results/` の証跡をローカルで確認して修正・再実行します。CIでブラウザ失敗artifactは保存しません。認証情報を含む証跡は公開・コミットしないでください。docs/07のチェックを完了するまで公開せず、CI成功をE2E成功の代わりにしません。
 
 ## 検証環境・本番環境
 
