@@ -26,15 +26,21 @@ Webは `http://127.0.0.1:3000`、Hono APIは `http://127.0.0.1:8787`。Webの `/
 pnpm typecheck
 pnpm test
 pnpm test:db
-pnpm exec playwright install chromium
-pnpm test:e2e
-pnpm build
 pnpm build:worker
 ```
 
 `test:db` はPostgreSQLの `initdb`・`pg_ctl`・`psql` を使い、一時DBへ実マイグレーションを適用して権限・競合・トランザクションを検証します。既存DBを初期化しません。`pnpm test` のみでは接続設定のないDBテストはスキップされます。
 
-ブラウザの認証済みフローテストは、外部Auth/APIをネットワーク境界で置き換える画面テストです。実際のメール・Google OAuth・Cloudflareへの公開を証明するものではありません。GitHub Actionsでも型検査・実PostgreSQL・ブラウザ・ビルドを実行します。
+GitHub Actionsの `CI / verify` はmainへのpushとmain宛てPRで、型検査・実PostgreSQLへのマイグレーション・単体/DBテスト・Workersビルドを実行します。作業ブランチのpushでは実行せず、同じPRの新しいコミットは古い実行を停止します。
+
+ブラウザE2EはPR CIに含めず、リリース前に手動で実行し、対象コミットと結果を記録します。
+
+```sh
+pnpm exec playwright install --with-deps chromium
+pnpm test:e2e
+```
+
+ブラウザの認証済みフローテストは、外部Auth/APIをネットワーク境界で置き換える画面テストです。実際のメール・Google OAuth・Cloudflareへの公開を証明するものではありません。CI成功だけではE2E完了とせず、[リリース前チェックリスト](docs/07_開発計画とテスト.md)を確認してください。
 
 ## 構成とSSoT
 

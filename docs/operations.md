@@ -16,8 +16,14 @@ OpenAI/天気のキーがなくても、ルールベース提案・季節の暫�
 
 - `pnpm test`：ドメイン、共有スキーマ、依存先を注入したAPI・外部サービス障害テスト。DB接続があればDBテストも対象。
 - `pnpm test:db`：一時PostgreSQLを作成し、実SQLの所有権、RLS、100枠の競合、着用・洗濯訂正、予算、リース、冪等性を検証して停止・削除。`POSTGRES_BIN` でバイナリディレクトリを指定できます。
-- `pnpm test:e2e`：ChromiumのPC・スマートフォンサイズで公開画面と認証済みUIを検証。Auth/APIの固定応答はテスト内のみ。実メール・実OAuth・実R2の代替ではありません。
-- `pnpm build`：vinextの通常ビルド。`pnpm build:worker`：Cloudflare Workers形式のビルド。ビルドは公開ではありません。
+- `pnpm test:e2e`：リリース前に手動実行する必須ゲート。ChromiumのPC・スマートフォンサイズで公開画面と認証済みUIを検証。Auth/APIの固定応答はテスト内のみ。実メール・実OAuth・実R2の代替ではありません。
+- `pnpm build:worker`：Cloudflare Workers形式のビルド（CI対象）。検証にはこのコマンドを使用します。ビルドは公開ではありません。
+
+### CIとリリース前の手動E2E
+
+`CI / verify` はmainへのpushとmain宛てPRで実行します。作業ブランチのpushでは実行しないため、PRの更新で同じ変更にpushとpull_requestの両方が起動することはありません。同じPRの新しいコミットでは古い実行を停止し、mainのpushや別PRの実行は停止しません。固定インストール、PostgreSQLマイグレーション、`pnpm typecheck`、`pnpm test`、`pnpm build:worker` を実行し、通常ビルドとブラウザE2Eは含めません。
+
+リリース担当者は対象コミットを確認して依存関係をインストールし、必要に応じて `pnpm exec playwright install --with-deps chromium` でブラウザを用意してから `pnpm test:e2e` を手動実行します。対象コミット・実行環境・結果をリリース記録に残し、失敗時は `test-results/` の証跡をローカルで確認して修正・再実行します。CIでブラウザ失敗artifactは保存しません。認証情報を含む証跡は公開・コミットしないでください。docs/07のチェックを完了するまで公開せず、CI成功をE2E成功の代わりにしません。
 
 ## 検証環境・本番環境
 
@@ -25,11 +31,24 @@ OpenAI/天気のキーがなくても、ルールベース提案・季節の暫�
 
 Webは `apps/web/wrangler.jsonc`、APIは `apps/api/wrangler.jsonc` が基礎設定です。API Workerへ同じドメインの `/api/*` のWorkers Routeを割り当て、Web Workerは残りを配信します。Cloudflareダッシュボードでドメイン、Worker名、環境別バケット名を確認して設定します。WebのVite開発プロキシは本番ルーティングを代替しません。
 
+CloudflareのWeb Worker名は `fukumakase`、本番ブランチは `main` とします。Build commandは `pnpm build:worker`、Deploy commandは `pnpm --filter @outfit/web exec wrangler deploy --config dist/server/wrangler.json` を設定します。MVPでは自動Preview Buildsを無効にし、mainのみ本番へ自動デプロイします。検証環境は本番と分離し、必要時に手動運用します。
+
 Web公開ビルド時の `NEXT_PUBLIC_SUPABASE_URL`・`NEXT_PUBLIC_SUPABASE_ANON_KEY` はクライアントへ埋め込まれる公開値です。秘密鍵を `NEXT_PUBLIC_*` に置かないでください。APIの `.dev.vars` は本番では使用されないため、必要な値をWrangler Secretsで設定します。
 
 APIのCloudflareバインディングは非公開の `CLOTHES_BUCKET`。R2のr2.dev公開アクセスとカスタム公開ドメインは無効にします。画像のPUT/GETは期限付きアップロード予約と認証済みAPIで行い、所有権チェックと `no-store` を通します。公開バケットや永続公開URLは使いません。
 
-Supabaseではメール確認、最低12文字のパスワード設定、Google OAuth、カスタムSMTP、レート制限、許可リダイレクトURLを構成します。メール認証・再設定は実在する検証用アカウントで動作確認し、認証情報は独自DBへ転記しません。
+Supabaseではメール確認、以下のパスワード要件、Google OAuth、カスタムSMTP、レート制限、許可リダイレクトURLを構成します。メール認証・再設定は実在する検証用アカウントで動作確認し、認証情報は独自DBへ転記しません。
+
+### Supabase Authのパスワード設定
+
+1. 対象の検証／本番プロジェクトを確認し、Supabase DashboardのAuthenticationにあるメール認証・パスワードの設定を開きます。
+2. Minimum password lengthを **8** に設定します。
+3. Required charactersは **英小文字・英大文字・数字・記号をすべて必須**とする最強プリセット（lowercase / uppercase / digits / symbols）を選び、保存します。大小どちらかの英字だけでよい設定とは異なります。記号の範囲は `08_認証・個人情報最小化設計.md` の32文字と一致させます。[Supabase公式のパスワード設定](https://supabase.com/docs/guides/auth/password-security)
+4. 保存後に設定を再表示して確認し、検証環境のテスト専用アカウントで新規登録・再設定を試します。全条件を満たすASCIIの8文字は受理、ASCIIの7文字以下と各文字種を欠く値は拒否されることを、UI経由とAuth APIへの直接リクエストの両方で確認します。Unicodeを含む長さの境界値は、クライアントのコードポイント数による判定とHostedの実動作（UTF-8バイト長で判定される可能性）を別々に検証・記録し、同じ結果を前提にしません。実際のパスワードをログ・検証記録へ残しません。
+5. 変更前の弱いパスワードを持つ既存のテスト専用アカウントが引き続きログインできることを確認します。アプリのログイン画面に新しい強度検証は適用しません。漏えいパスワード保護など追加のAuth設定による拒否も別途確認します。
+6. Supabase Authの技術上限はUTF-8で72バイトです（半角英数字・記号なら72文字）。Dashboardで別途上限を設定する作業ではありません。他の要件を満たす72バイト／73バイトをASCIIのみ・Unicode混在の両方で試し、UIの共有スキーマとAuth API直接呼び出しで受理／拒否を確認します。Unicodeでは文字数とバイト数を混同しないでください。UIの超過エラーが入力修正で解除され、ログイン画面にはこの上限が追加されていないことも確認します。
+
+この設定は運営者が環境ごとに行う作業です。リポジトリ内の共有スキーマとUIは更新済みでも、**リモートSupabaseへの設定反映・実サービス検証が完了したことを意味しません**。公開前チェックリストで未実施を管理してください。
 
 ## 上限・費用・障害
 
