@@ -1,5 +1,29 @@
 import { z } from "zod";
 
+export const passwordPolicy = {
+  minLength: 8,
+  maxBytes: 72,
+  message:
+    "8文字以上で、英小文字・英大文字・数字・記号をそれぞれ1文字以上含めてください。",
+  maxMessage:
+    "パスワードが長すぎます。72バイト以内（半角英数字・記号なら72文字以内）に短くしてください。",
+} as const;
+
+// Supabase Hosted's strongest preset: all 32 ASCII punctuation characters.
+// Spaces and non-ASCII symbols do not satisfy the required symbol group.
+export const newPasswordSchema = z
+  .string()
+  .refine(
+    (value) =>
+      new TextEncoder().encode(value).byteLength <= passwordPolicy.maxBytes,
+    passwordPolicy.maxMessage,
+  )
+  .min(passwordPolicy.minLength, passwordPolicy.message)
+  .regex(/[a-z]/, passwordPolicy.message)
+  .regex(/[A-Z]/, passwordPolicy.message)
+  .regex(/[0-9]/, passwordPolicy.message)
+  .regex(/[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]/, passwordPolicy.message);
+
 export const categorySchema = z.enum(["top", "bottom", "shoes", "outerwear"]);
 export const seasonSchema = z.enum(["spring", "summer", "autumn", "winter"]);
 export const dateSchema = z

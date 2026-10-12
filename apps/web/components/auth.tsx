@@ -1,8 +1,9 @@
 "use client";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Mail } from "lucide-react";
+import { newPasswordSchema, passwordPolicy } from "@outfit/schemas";
 import { authClient } from "../lib/client";
 import { Notice, Loading } from "./ui";
 let callbackExchange:
@@ -15,6 +16,10 @@ export function AuthScreen({
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [passwordInvalid, setPasswordInvalid] = useState(false);
+  const passwordInput = useRef<HTMLInputElement>(null);
+  const requiresNewPassword = mode === "signup" || mode === "reset-password";
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -26,6 +31,16 @@ export function AuthScreen({
   };
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (requiresNewPassword) {
+      const validation = newPasswordSchema.safeParse(password);
+      if (!validation.success) {
+        setPasswordInvalid(true);
+        setError(validation.error.issues[0]?.message ?? passwordPolicy.message);
+        setMessage("");
+        passwordInput.current?.focus();
+        return;
+      }
+    }
     const client = authClient();
     if (!client) {
       setError(
@@ -58,6 +73,9 @@ export function AuthScreen({
           throw new Error(
             "登録を受け付けられませんでした。時間をおいて再試行するか、Googleで続けてください。",
           );
+        setEmail("");
+        setPassword("");
+        setPasswordVisible(false);
         if (data.session) router.push("/onboarding");
         else
           setMessage(
@@ -145,20 +163,79 @@ export function AuthScreen({
             </label>
           )}
           {mode !== "forgot-password" && (
-            <label>
-              パスワード
-              <input
-                type="password"
-                required
-                minLength={mode === "login" ? 1 : 12}
-                autoComplete={
-                  mode === "login" ? "current-password" : "new-password"
-                }
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-              {mode !== "login" && <small>12文字以上で入力してください</small>}
-            </label>
+            <div style={{ marginBottom: 22 }}>
+              <label htmlFor="auth-password" style={{ marginBottom: 8 }}>
+                パスワード
+              </label>
+              <div style={{ position: "relative" }}>
+                <input
+                  id="auth-password"
+                  ref={passwordInput}
+                  type={passwordVisible ? "text" : "password"}
+                  required
+                  minLength={mode === "login" ? 1 : passwordPolicy.minLength}
+                  aria-invalid={requiresNewPassword && passwordInvalid}
+                  aria-describedby={
+                    requiresNewPassword ? "password-requirements" : undefined
+                  }
+                  autoComplete={
+                    mode === "login" ? "current-password" : "new-password"
+                  }
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (requiresNewPassword) {
+                      e.target.setCustomValidity("");
+                      setPasswordInvalid(false);
+                      if (
+                        error === passwordPolicy.message ||
+                        error === passwordPolicy.maxMessage
+                      )
+                        setError("");
+                    }
+                  }}
+                  onInvalid={(e) => {
+                    if (requiresNewPassword) {
+                      e.currentTarget.setCustomValidity(passwordPolicy.message);
+                      setPasswordInvalid(true);
+                      setError(passwordPolicy.message);
+                    }
+                  }}
+                  style={{ paddingRight: 88 }}
+                />
+                <button
+                  type="button"
+                  aria-label={
+                    passwordVisible ? "パスワードを非表示" : "パスワードを表示"
+                  }
+                  aria-controls="auth-password"
+                  aria-pressed={passwordVisible}
+                  onClick={() => setPasswordVisible((visible) => !visible)}
+                  style={{
+                    position: "absolute",
+                    right: 4,
+                    top: 2,
+                    bottom: 2,
+                    padding: "0 12px",
+                    fontSize: 13,
+                    color: "var(--green)",
+                  }}
+                >
+                  {passwordVisible ? "非表示" : "表示"}
+                </button>
+              </div>
+              {requiresNewPassword && (
+                <small
+                  id="password-requirements"
+                  style={{ display: "block", marginTop: 8 }}
+                >
+                  {passwordPolicy.message} 記号は半角の ! @ # _ などです。
+                  <br />
+                  最大{passwordPolicy.maxBytes}バイト（半角英数字・記号なら
+                  {passwordPolicy.maxBytes}文字）です。
+                </small>
+              )}
+            </div>
           )}
           <button className="button primary" disabled={busy}>
             {busy
