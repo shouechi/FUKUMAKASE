@@ -31,6 +31,8 @@ OpenAI/天気のキーがなくても、ルールベース提案・季節の暫�
 
 Webは `apps/web/wrangler.jsonc`、APIは `apps/api/wrangler.jsonc` が基礎設定です。API Workerへ同じドメインの `/api/*` のWorkers Routeを割り当て、Web Workerは残りを配信します。Cloudflareダッシュボードでドメイン、Worker名、環境別バケット名を確認して設定します。WebのVite開発プロキシは本番ルーティングを代替しません。
 
+CloudflareのWeb Worker名は `fukumakase`、本番ブランチは `main` とします。Build commandは `pnpm build:worker`、Deploy commandは `pnpm --filter @outfit/web exec wrangler deploy --config dist/server/wrangler.json` を設定します。MVPでは自動Preview Buildsを無効にし、mainのみ本番へ自動デプロイします。検証環境は本番と分離し、必要時に手動運用します。
+
 Web公開ビルド時の `NEXT_PUBLIC_SUPABASE_URL`・`NEXT_PUBLIC_SUPABASE_ANON_KEY` はクライアントへ埋め込まれる公開値です。秘密鍵を `NEXT_PUBLIC_*` に置かないでください。APIの `.dev.vars` は本番では使用されないため、必要な値をWrangler Secretsで設定します。
 
 APIのCloudflareバインディングは非公開の `CLOTHES_BUCKET`。R2のr2.dev公開アクセスとカスタム公開ドメインは無効にします。画像のPUT/GETは期限付きアップロード予約と認証済みAPIで行い、所有権チェックと `no-store` を通します。公開バケットや永続公開URLは使いません。
