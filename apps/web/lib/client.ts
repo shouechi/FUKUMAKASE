@@ -2,6 +2,8 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   limits,
+  apiResponseSchemas,
+  apiErrorResponseSchema,
   type ApiEndpoint,
   type ApiRequest,
   type ApiResponse,
@@ -34,7 +36,15 @@ export class ApiError extends Error {
     super(message);
   }
 }
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+const invalidResponseMessage =
+  "データを読み取れませんでした。少し待って、もう一度お試しください。";
+const networkErrorMessage =
+  "通信に失敗しました。接続を確認して、もう一度お試しください。";
+const supportedImageMediaTypes = ["image/jpeg", "image/png", "image/webp"];
+function invalidResponse(status: number): ApiError {
+  return new ApiError("INVALID_RESPONSE", invalidResponseMessage, status);
+}
+async function authorizedHeaders(path: string, options: RequestInit) {
   const auth = authClient();
   const session = auth ? (await auth.auth.getSession()).data.session : null;
   const publicReceipt = path.startsWith("/api/account/deletion-status/");
@@ -43,13 +53,71 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (session && !publicReceipt)
     headers.set("Authorization", `Bearer ${session.access_token}`);
+  return { headers, userId: session?.user.id };
+}
+async function fetchResponse(
+  path: string,
+  options: RequestInit,
+): Promise<Response> {
+  try {
+    return await fetch(path, { ...options, cache: "no-store" });
+  } catch {
+    throw new ApiError("NETWORK_ERROR", networkErrorMessage, 0);
+  }
+}
+async function readBody<T>(
+  response: Response,
+  read: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await read();
+  } catch {
+    throw new ApiError("NETWORK_ERROR", networkErrorMessage, response.status);
+  }
+}
+function mediaType(response: Response): string {
+  return (response.headers.get("Content-Type") ?? "")
+    .split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+}
+async function readJson(response: Response): Promise<unknown> {
+  if (
+    !/^application\/(?:json|[a-z0-9!#$&^_.+-]+\+json)$/.test(
+      mediaType(response),
+    )
+  )
+    throw invalidResponse(response.status);
+  const text = await readBody(response, () => response.text());
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw invalidResponse(response.status);
+  }
+}
+function responseError(body: unknown, status: number): ApiError {
+  const parsed = apiErrorResponseSchema.safeParse(body);
+  if (!parsed.success) throw invalidResponse(status);
+  return new ApiError(
+    parsed.data.error.code,
+    parsed.data.error.message,
+    status,
+  );
+}
+async function request<K extends ApiEndpoint>(
+  endpoint: K,
+  path: string,
+  options: RequestInit = {},
+): Promise<ApiResponse<K>> {
+  const { headers, userId } = await authorizedHeaders(path, options);
   if (options.body && !(options.body instanceof Blob))
     headers.set("Content-Type", "application/json");
-  const mutation =
-    !!options.method && !["GET", "HEAD"].includes(options.method);
+  headers.set("Accept", "application/json");
+  const method = (options.method ?? "GET").toUpperCase();
+  const mutation = !["GET", "HEAD"].includes(method);
   const fingerprint =
     mutation && typeof options.body !== "object"
-      ? `${session?.user.id}:${options.method}:${path}:${options.body ?? ""}`
+      ? `${userId}:${method}:${path}:${options.body ?? ""}`
       : null;
   if (mutation && !headers.has("Idempotency-Key")) {
     const key =
@@ -57,28 +125,23 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     if (fingerprint) pendingMutations.set(fingerprint, key);
     headers.set("Idempotency-Key", key);
   }
-  const response = await fetch(path, {
-    ...options,
-    headers,
-    cache: "no-store",
-  });
+  const response = await fetchResponse(path, { ...options, headers });
+  const body = await readJson(response);
   if (!response.ok) {
-    const body = await response.json().catch(() => null);
+    const error = responseError(body, response.status);
     if (
       fingerprint &&
+      response.status >= 400 &&
       response.status < 500 &&
-      body?.error?.code !== "OPERATION_IN_PROGRESS"
+      error.code !== "OPERATION_IN_PROGRESS"
     )
       pendingMutations.delete(fingerprint);
-    throw new ApiError(
-      body?.error?.code ?? "REQUEST_FAILED",
-      body?.error?.message ?? "処理に失敗しました。もう一度お試しください。",
-      response.status,
-    );
+    throw error;
   }
-  const data = response.status === 204 ? undefined : await response.json();
+  const parsed = apiResponseSchemas[endpoint].safeParse(body);
+  if (!parsed.success) throw invalidResponse(response.status);
   if (fingerprint) pendingMutations.delete(fingerprint);
-  return data as T;
+  return parsed.data as ApiResponse<K>;
 }
 type SegmentNames<S extends string> =
   S extends `${string}/:${infer P}/${infer Rest}`
@@ -115,7 +178,7 @@ export function api<K extends ApiEndpoint>(
   const query = options?.query
     ? `?${new URLSearchParams(Object.entries(options.query).map(([k, v]) => [k, String(v)]))}`
     : "";
-  return request<ApiResponse<K>>(path + query, {
+  return request(endpoint, path + query, {
     method,
     headers: options?.headers,
     ...(options?.body !== undefined
@@ -129,19 +192,21 @@ export function api<K extends ApiEndpoint>(
   });
 }
 export async function privateImage(id: string): Promise<string> {
-  const session = (await authClient()?.auth.getSession())?.data.session;
-  if (!session) throw new Error("ログインしてください");
-  const res = await fetch(`/api/clothes/${encodeURIComponent(id)}/image`, {
-    headers: { Authorization: `Bearer ${session.access_token}` },
-    cache: "no-store",
-  });
-  if (!res.ok) throw new Error("写真を取得できません");
-  return URL.createObjectURL(await res.blob());
+  const path = `/api/clothes/${encodeURIComponent(id)}/image`;
+  const { headers } = await authorizedHeaders(path, {});
+  const response = await fetchResponse(path, { headers });
+  if (!response.ok)
+    throw responseError(await readJson(response), response.status);
+  if (!supportedImageMediaTypes.includes(mediaType(response)))
+    throw invalidResponse(response.status);
+  const blob = await readBody(response, () => response.blob());
+  if (!blob.size) throw invalidResponse(response.status);
+  return URL.createObjectURL(blob);
 }
 export async function compressImage(file: File): Promise<Blob> {
   if (file.size > limits.uploadBytes)
     throw new Error("写真は5MB以下で選んでください");
-  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type))
+  if (!supportedImageMediaTypes.includes(file.type))
     throw new Error("JPEG・PNG・WebPの写真を選んでください");
   const bitmap = await createImageBitmap(file);
   try {

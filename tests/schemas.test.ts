@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
   aiOutfitSchema,
+  apiResponseSchemas,
+  apiErrorResponseSchema,
   classificationSchema,
   clothesCreateSchema,
   clothesPatchSchema,
@@ -137,5 +139,203 @@ describe("untrusted API boundaries derived from requirements", () => {
       aiOutfitSchema.safeParse({ items, reason_short: "長".repeat(101) })
         .success,
     ).toBe(false);
+  });
+});
+
+describe("shared API response contracts", () => {
+  const date = "2026-10-13";
+  const timestamp = "2026-10-13T00:00:00Z";
+  const cloth = {
+    id: top,
+    category: "top",
+    subtype: "shirt",
+    color: "白",
+    seasons: [],
+    thickness: null,
+    wear_limit: 1,
+    wears_since_wash: 0,
+    state: "available",
+    classification_state: "pending",
+  };
+  const plan = {
+    target_date: date,
+    outfit_id: bottom,
+    mode: "auto",
+    plan_status: "partial",
+    source: "rule",
+    reason_short: "服を追加してください",
+    items: [{ clothes_id: top, slot: "top", clothes: cloth }],
+    warnings: ["ボトムスが未登録です"],
+  };
+  const override = {
+    target_date: date,
+    is_workday: false,
+    occasion: "normal",
+    mood: null,
+  };
+  const receipt = {
+    id: top,
+    target_date: date,
+    outfit_id: bottom,
+    confirmed_at: timestamp,
+  };
+  const fixtures = {
+    "GET /api/me/preferences": {
+      ...defaultPreferences,
+      onboarding_completed: true,
+    },
+    "PATCH /api/me/preferences": {
+      ...defaultPreferences,
+      onboarding_completed: true,
+    },
+    "GET /api/me/work-weekdays": { weekdays: [1, 3, 5] },
+    "PUT /api/me/work-weekdays": { weekdays: [] },
+    "GET /api/me/day-overrides/:date": { override },
+    "PUT /api/me/day-overrides/:date": override,
+    "DELETE /api/me/day-overrides/:date": { ok: true },
+    "POST /api/clothes/upload-url": {
+      upload_id: top,
+      upload_url: `/api/uploads/${top}`,
+      method: "PUT",
+      expires_at: timestamp,
+      headers: { "Content-Type": "image/webp" },
+    },
+    "PUT /api/uploads/:id": { ok: true, upload_id: top },
+    "POST /api/clothes": cloth,
+    "GET /api/clothes": { items: [cloth], total: 1, page: 1, limit: 100 },
+    "GET /api/clothes/:id": cloth,
+    "PATCH /api/clothes/:id": cloth,
+    "DELETE /api/clothes/:id": { ok: true },
+    "POST /api/clothes/:id/washed": cloth,
+    "GET /api/outfits/today": plan,
+    "POST /api/outfits/today/regenerate": {
+      ...plan,
+      daily_regens_remaining: 2,
+    },
+    "GET /api/plans/weekly": { week: "2026-10-12", days: [plan] },
+    "POST /api/plans/weekly/regenerate": {
+      week: "2026-10-12",
+      days: [plan],
+      weekly_regens_remaining: 1,
+    },
+    "PUT /api/plans/:date": plan,
+    "POST /api/wear-logs": receipt,
+    "GET /api/wear-logs": {
+      items: [{ ...receipt, items: [{ clothes_id: top, clothes: cloth }] }],
+    },
+    "GET /api/wear-logs/:date": {
+      ...receipt,
+      items: [{ clothes_id: top, clothes: cloth }],
+    },
+    "PATCH /api/wear-logs/:date": receipt,
+    "GET /api/me/usage": {
+      daily_regens_remaining: 0,
+      weekly_regens_remaining: 2,
+      daily_reset_at: timestamp,
+      weekly_reset_at: timestamp,
+    },
+    "POST /api/account/delete": { status: "deleting", job_id: top },
+    "GET /api/account/deletion-status/:id": { status: "completed" },
+  };
+
+  test("all canonical endpoint responses have independently supplied valid examples", () => {
+    expect(Object.keys(apiResponseSchemas).sort()).toEqual(
+      Object.keys(fixtures).sort(),
+    );
+    for (const endpoint of Object.keys(fixtures) as (keyof typeof fixtures)[]) {
+      const result = apiResponseSchemas[endpoint].safeParse(fixtures[endpoint]);
+      expect(result.success, endpoint).toBe(true);
+      if (result.success) expect(result.data).toEqual(fixtures[endpoint]);
+      expect(
+        apiResponseSchemas[endpoint].safeParse({}).success,
+        `${endpoint}: empty object`,
+      ).toBe(false);
+    }
+  });
+
+  test("response validation must not invent request defaults for omitted fields", () => {
+    for (const field of ["occasion", "mood", "is_workday", "target_date"]) {
+      const incomplete: Record<string, unknown> = { ...override };
+      delete incomplete[field];
+      expect(
+        apiResponseSchemas["PUT /api/me/day-overrides/:date"].safeParse(
+          incomplete,
+        ).success,
+        field,
+      ).toBe(false);
+      expect(
+        apiResponseSchemas["GET /api/me/day-overrides/:date"].safeParse({
+          override: incomplete,
+        }).success,
+        field,
+      ).toBe(false);
+    }
+  });
+
+  test("only nullable API values accept absence", () => {
+    expect(
+      apiResponseSchemas["GET /api/outfits/today"].safeParse(null).success,
+    ).toBe(true);
+    expect(
+      apiResponseSchemas["GET /api/me/day-overrides/:date"].safeParse({
+        override: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      apiResponseSchemas["GET /api/me/usage"].safeParse(null).success,
+    ).toBe(false);
+  });
+
+  test("nested persisted values cannot cross the response boundary with incompatible types", () => {
+    for (const malformed of [
+      { ...plan, items: {} },
+      { ...plan, warnings: [3] },
+      {
+        ...plan,
+        items: [
+          {
+            clothes_id: top,
+            slot: "top",
+            clothes: { ...cloth, wears_since_wash: "0" },
+          },
+        ],
+      },
+      {
+        ...plan,
+        weather: {
+          date,
+          min_c: 10,
+          max_c: 20,
+          rain_probability: 101,
+          source: "cache",
+          fetched_at: null,
+          provisional: true,
+        },
+      },
+    ])
+      expect(
+        apiResponseSchemas["GET /api/outfits/today"].safeParse(malformed)
+          .success,
+      ).toBe(false);
+  });
+
+  test("error envelopes require declared string fields rather than trusting arbitrary JSON", () => {
+    const error = {
+      code: "SERVICE_UNAVAILABLE",
+      message: "一時的に利用できません",
+      request_id: "fixture-request",
+    };
+    expect(apiErrorResponseSchema.safeParse({ error }).success).toBe(true);
+    for (const field of ["code", "message", "request_id"]) {
+      const incomplete: Record<string, unknown> = { ...error };
+      delete incomplete[field];
+      expect(
+        apiErrorResponseSchema.safeParse({ error: incomplete }).success,
+      ).toBe(false);
+      expect(
+        apiErrorResponseSchema.safeParse({ error: { ...error, [field]: {} } })
+          .success,
+      ).toBe(false);
+    }
   });
 });

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -30,24 +30,68 @@ import {
   Loading,
   Notice,
 } from "./ui";
+async function refreshUsageAfterMutation(
+  onUsage: (usage: Usage) => void,
+  onReadError: (message: string) => void,
+) {
+  try {
+    onUsage(await api("GET /api/me/usage"));
+  } catch (e) {
+    // Generation is already saved; recover by reading rather than repeating it.
+    onReadError((e as Error).message);
+  }
+}
+function ReloadButton({
+  disabled,
+  onReload,
+}: {
+  disabled: boolean;
+  onReload: () => Promise<void>;
+}) {
+  return (
+    <button className="button secondary" disabled={disabled} onClick={onReload}>
+      <RefreshCw size={16} />
+      もう一度読み込む
+    </button>
+  );
+}
 export function Today() {
+  const router = useRouter();
   const [plan, setPlan] = useState<Plan | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [reason, setReason] =
     useState<ApiRequest<"POST /api/outfits/today/regenerate">["reason"]>(
       "different",
     );
   const [regenOpen, setRegenOpen] = useState(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
+    try {
+      const preferences = await api("GET /api/me/preferences");
+      if (!preferences.onboarding_completed) {
+        router.replace("/onboarding");
+        return;
+      }
+      const [p, u] = await Promise.all([
+        api("GET /api/outfits/today"),
+        api("GET /api/me/usage"),
+      ]);
+      setPlan(p);
+      setUsage(u);
+    } catch (e) {
+      setLoadError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [router]);
   useEffect(() => {
-    Promise.all([api("GET /api/outfits/today"), api("GET /api/me/usage")])
-      .then(([p, u]) => {
-        setPlan(p);
-        setUsage(u);
-      })
-      .catch((e) => setError(e.message));
-  }, []);
+    void load();
+  }, [load]);
   async function confirm() {
     if (!plan?.outfit_id) return;
     setBusy(true);
@@ -74,8 +118,13 @@ export function Today() {
         body: { reason },
       });
       setPlan(p);
-      setUsage(await api("GET /api/me/usage"));
       setRegenOpen(false);
+      setUsage((current) =>
+        current
+          ? { ...current, daily_regens_remaining: p.daily_regens_remaining }
+          : current,
+      );
+      await refreshUsageAfterMutation(setUsage, setLoadError);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -87,9 +136,21 @@ export function Today() {
       <Heading eyebrow={dateLabel(todayJst())} title="今日の服は、これ。">
         朝のひとつを、おまかせに。
       </Heading>
-      {error && <Notice kind="error">{error}</Notice>}
-      {!plan ? (
-        !error && <Loading />
+      {(loadError || error) && (
+        <Notice kind="error">{loadError || error}</Notice>
+      )}
+      {loadError && <ReloadButton disabled={loading || busy} onReload={load} />}
+      {loading ? (
+        <Loading />
+      ) : !plan ? (
+        !loadError && (
+          <Empty title="今日の服がまだありません。">
+            <p>今日の予定や登録した服を確認してください。</p>
+            <Link className="button secondary" href={`/week/${todayJst()}`}>
+              今日の予定を確認
+            </Link>
+          </Empty>
+        )
       ) : (
         <>
           <div className="today-meta">
@@ -221,7 +282,7 @@ export function Today() {
                     </label>
                     <button
                       className="button secondary"
-                      disabled={busy}
+                      disabled={busy || !!loadError}
                       onClick={regenerate}
                     >
                       もう一度提案する
@@ -238,6 +299,7 @@ export function Today() {
                     className="text-button"
                     disabled={
                       busy ||
+                      !!loadError ||
                       usage?.daily_regens_remaining === 0 ||
                       plan.mode === "manual_lock" ||
                       plan.plan_status === "confirmed"
@@ -273,20 +335,28 @@ export function Week() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => {
+  const [loadError, setLoadError] = useState("");
+  const load = useCallback(async () => {
     setLoading(true);
-    Promise.all([
-      api("GET /api/plans/weekly", { query: { week } }),
-      api("GET /api/me/usage"),
-    ])
-      .then(([p, u]) => {
-        setPlans(p.days);
-        setUsage(u);
-        setError("");
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
+    setLoadError("");
+    try {
+      const [p, u] = await Promise.all([
+        api("GET /api/plans/weekly", { query: { week } }),
+        api("GET /api/me/usage"),
+      ]);
+      setPlans(p.days);
+      setUsage(u);
+      setError("");
+    } catch (e) {
+      setLoadError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
   }, [week]);
+  useEffect(() => {
+    setPlans([]);
+    void load();
+  }, [load]);
   async function regenerate() {
     setBusy(true);
     setError("");
@@ -295,7 +365,15 @@ export function Week() {
         body: { week },
       });
       setPlans(p.days);
-      setUsage(await api("GET /api/me/usage"));
+      if (p.weekly_regens_remaining !== undefined) {
+        const remaining = p.weekly_regens_remaining;
+        setUsage((current) =>
+          current
+            ? { ...current, weekly_regens_remaining: remaining }
+            : current,
+        );
+      }
+      await refreshUsageAfterMutation(setUsage, setLoadError);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -311,6 +389,7 @@ export function Week() {
         <button
           className="icon-button"
           aria-label="前の週"
+          disabled={loading || busy}
           onClick={() => setWeek(shiftDate(week, -7))}
         >
           <ChevronLeft />
@@ -321,15 +400,19 @@ export function Week() {
         <button
           className="icon-button"
           aria-label="次の週"
+          disabled={loading || busy}
           onClick={() => setWeek(shiftDate(week, 7))}
         >
           <ChevronRight />
         </button>
       </div>
-      {error && <Notice kind="error">{error}</Notice>}
+      {(loadError || error) && (
+        <Notice kind="error">{loadError || error}</Notice>
+      )}
+      {loadError && <ReloadButton disabled={loading || busy} onReload={load} />}
       {loading ? (
         <Loading />
-      ) : (
+      ) : loadError && !plans.length ? null : (
         <div className="week-list">
           {Array.from({ length: 7 }, (_, i) => shiftDate(week, i)).map(
             (date) => {
@@ -391,7 +474,12 @@ export function Week() {
       <div className="regen-section">
         <button
           className="button secondary"
-          disabled={busy || loading || usage?.weekly_regens_remaining === 0}
+          disabled={
+            busy ||
+            loading ||
+            !!loadError ||
+            usage?.weekly_regens_remaining === 0
+          }
           onClick={regenerate}
         >
           <RefreshCw size={16} />

@@ -3,6 +3,7 @@ import {
   defaultPreferences,
   type Cloth,
   type Plan,
+  type UploadGrant,
 } from "../../packages/schemas/src/index";
 import { jstDate, weekStart } from "../../packages/domain/src/index";
 
@@ -29,6 +30,13 @@ const bottom: Cloth = {
   subtype: "slacks",
   color: "黒",
   wear_limit: 3,
+};
+const uploadGrant: UploadGrant = {
+  upload_id: "44444444-4444-4444-8444-444444444444",
+  upload_url: "/api/uploads/44444444-4444-4444-8444-444444444444",
+  method: "PUT",
+  expires_at: "2026-10-14T00:00:00Z",
+  headers: { "Content-Type": "image/webp" },
 };
 
 async function fixture(
@@ -58,7 +66,7 @@ async function fixture(
     key: string | undefined;
   }[] = [];
   const plan: Plan = {
-    id: "plan",
+    id: "66666666-6666-4666-8666-666666666666",
     target_date: today,
     outfit_id: "33333333-3333-4333-8333-333333333333",
     mode: options.locked ? "manual_lock" : "auto",
@@ -154,20 +162,20 @@ async function fixture(
     else if (path === "/api/plans/weekly")
       data = { week: weekStart(today), days: [plan] };
     else if (path.startsWith("/api/me/day-overrides/"))
-      data = {
-        override: {
-          target_date: today,
-          is_workday: true,
-          occasion: "external_visit",
-          mood: "きれいめ",
-        },
-      };
-    else if (path === "/api/clothes/upload-url")
-      data = {
-        upload_id: "44444444-4444-4444-8444-444444444444",
-        upload_url: "/api/uploads/44444444-4444-4444-8444-444444444444",
-      };
-    else if (path.startsWith("/api/uploads/")) data = { ok: true };
+      data =
+        method === "GET"
+          ? {
+              override: {
+                target_date: today,
+                is_workday: true,
+                occasion: "external_visit",
+                mood: "きれいめ",
+              },
+            }
+          : { target_date: today, ...req.postDataJSON() };
+    else if (path === "/api/clothes/upload-url") data = uploadGrant;
+    else if (path.startsWith("/api/uploads/"))
+      data = { ok: true, upload_id: path.split("/").at(-1) };
     else if (path === "/api/clothes") {
       if (method === "POST") {
         const payload = req.postDataJSON();
@@ -185,16 +193,22 @@ async function fixture(
       clothes[0].wears_since_wash = 1;
       clothes[0].state = "laundry";
       clothes[1].wears_since_wash = 1;
-      data = { id: "log", target_date: today, outfit_id: plan.outfit_id };
+      data = {
+        id: "77777777-7777-4777-8777-777777777777",
+        target_date: today,
+        outfit_id: plan.outfit_id,
+        confirmed_at: `${today}T00:00:00Z`,
+      };
     } else if (path === "/api/wear-logs")
       data = {
         items:
           plan.plan_status === "confirmed"
             ? [
                 {
-                  id: "log",
+                  id: "77777777-7777-4777-8777-777777777777",
                   target_date: today,
                   outfit_id: plan.outfit_id,
+                  confirmed_at: `${today}T00:00:00Z`,
                   items: plan.items,
                 },
               ]
@@ -301,6 +315,248 @@ test("quota exhaustion and incomplete outfit disable unsafe actions", async ({
   ).toBeDisabled();
 });
 
+for (const [label, contentType, body] of [
+  [
+    "HTML returned as a successful API response",
+    "text/html",
+    "<!DOCTYPE html><html><body>private-response-marker</body></html>",
+  ],
+  ["invalid JSON", "application/json", '{"target_date":'],
+  ["JSON outside the shared plan contract", "application/json", '{"items":{}}'],
+] as const) {
+  test(`${label} shows Japanese guidance without leaking response data`, async ({
+    page,
+  }) => {
+    await fixture(page);
+    const exceptions: string[] = [];
+    page.on("pageerror", (error) => exceptions.push(error.message));
+    await page.route("**/api/outfits/today", (route) =>
+      route.fulfill({ status: 200, contentType, body }),
+    );
+    await page.goto("/today");
+    await expect(page.getByRole("alert")).toContainText(
+      "データを読み取れませんでした",
+    );
+    await expect(page.getByRole("alert")).not.toContainText(
+      /Unexpected token|DOCTYPE|private-response-marker/,
+    );
+    await expect(
+      page.getByRole("status").filter({ hasText: "読み込み中です" }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "これを着た", exact: true }),
+    ).toHaveCount(0);
+    expect(exceptions).toEqual([]);
+  });
+}
+
+test("HTML in an image response shows a placeholder and leaves outfit actions usable", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.route("**/api/clothes/*/image", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: "<!DOCTYPE html><html></html>",
+    }),
+  );
+  await page.goto("/today");
+  await expect(page.getByText("写真を読み込めません")).toHaveCount(2);
+  await expect(
+    page.getByRole("button", { name: "これを着た", exact: true }),
+  ).toBeEnabled();
+  await expect(
+    page.getByRole("img", { name: /のトップス|のボトムス/ }),
+  ).toHaveCount(0);
+});
+
+test("today retries failed reads and recovers without requiring another login", async ({
+  page,
+}) => {
+  const s = await fixture(page);
+  let attempts = 0;
+  await page.route("**/api/outfits/today", (route) => {
+    attempts++;
+    return attempts === 1
+      ? route.fulfill({
+          status: 200,
+          contentType: "text/html",
+          body: "<!DOCTYPE html><html></html>",
+        })
+      : route.fulfill({ json: s.plan });
+  });
+  await page.goto("/today");
+  await expect(page.getByRole("alert")).toContainText(
+    "データを読み取れませんでした",
+  );
+  await page
+    .getByRole("button", { name: "もう一度読み込む", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "これを着た", exact: true }),
+  ).toBeEnabled();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  expect(attempts).toBe(2);
+  expect(s.mutations).toEqual([]);
+});
+
+test("an undecodable image with a valid MIME type recovers to its placeholder", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.route("**/api/clothes/*/image", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "image/webp",
+      body: Buffer.from("invalid image bytes"),
+    }),
+  );
+  await page.goto("/today");
+  await expect(page.getByText("写真を読み込めません")).toHaveCount(2);
+  await expect(
+    page.getByRole("img", { name: /のトップス|のボトムス/ }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "これを着た", exact: true }),
+  ).toBeEnabled();
+});
+
+test("successful regeneration followed by an unreadable usage response retries only reads", async ({
+  page,
+}) => {
+  const s = await fixture(page);
+  let regens = 0;
+  let usageReads = 0;
+  await page.route("**/api/outfits/today/regenerate", (route) => {
+    regens++;
+    s.plan.reason_short = "再提案が完了しました";
+    return route.fulfill({ json: { ...s.plan, daily_regens_remaining: 2 } });
+  });
+  await page.route("**/api/me/usage", (route) => {
+    usageReads++;
+    if (usageReads === 2)
+      return route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: "<!DOCTYPE html><html></html>",
+      });
+    return route.fulfill({
+      json: {
+        daily_regens_remaining: regens ? 2 : 3,
+        weekly_regens_remaining: 2,
+        daily_reset_at: "2026-10-14T15:00:00Z",
+        weekly_reset_at: "2026-10-18T15:00:00Z",
+      },
+    });
+  });
+  await page.goto("/today");
+  await expect(
+    page.getByRole("button", { name: /別の服にする/ }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: /別の服にする/ }).click();
+  await page
+    .getByRole("button", { name: "もう一度提案する", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText(
+    "データを読み取れませんでした",
+  );
+  await expect(
+    page.getByRole("button", { name: "もう一度提案する", exact: true }),
+  ).toHaveCount(0);
+  expect(regens).toBe(1);
+  await page
+    .getByRole("button", { name: "もう一度読み込む", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByText("再提案が完了しました")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /別の服にする/ }),
+  ).toContainText("あと2回");
+  expect(usageReads).toBe(3);
+  expect(regens).toBe(1);
+});
+
+test("a legitimate absent plan finishes loading and offers useful navigation", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.route("**/api/outfits/today", (route) =>
+    route.fulfill({ contentType: "application/json", body: "null" }),
+  );
+  await page.goto("/today");
+  await expect(
+    page.getByRole("heading", { name: "今日の服がまだありません。" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("status").filter({ hasText: "読み込み中です" }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "これを着た", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "今日の予定を確認" }),
+  ).toBeVisible();
+});
+
+test("successful weekly regeneration recovers from unreadable usage using GET only", async ({
+  page,
+}) => {
+  const s = await fixture(page);
+  let regens = 0;
+  let usageReads = 0;
+  await page.route("**/api/plans/weekly/regenerate", (route) => {
+    regens++;
+    s.plan.reason_short = "週間の再提案が完了しました";
+    return route.fulfill({
+      json: {
+        week: weekStart(s.today),
+        days: [s.plan],
+        weekly_regens_remaining: 1,
+      },
+    });
+  });
+  await page.route("**/api/me/usage", (route) => {
+    usageReads++;
+    if (usageReads === 2)
+      return route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: "<!DOCTYPE html><html></html>",
+      });
+    return route.fulfill({
+      json: {
+        daily_regens_remaining: 3,
+        weekly_regens_remaining: regens ? 1 : 2,
+        daily_reset_at: "2026-10-14T15:00:00Z",
+        weekly_reset_at: "2026-10-18T15:00:00Z",
+      },
+    });
+  });
+  await page.goto("/week");
+  const regenerate = page.getByRole("button", {
+    name: "一週間を作り直す",
+    exact: true,
+  });
+  await expect(regenerate).toBeEnabled();
+  await regenerate.click();
+  await expect(page.getByRole("alert")).toContainText(
+    "データを読み取れませんでした",
+  );
+  await expect(regenerate).toBeDisabled();
+  expect(regens).toBe(1);
+  await page
+    .getByRole("button", { name: "もう一度読み込む", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByText("週間の再提案が完了しました")).toBeVisible();
+  await expect(page.getByText("今週あと1回。", { exact: false })).toBeVisible();
+  await expect(regenerate).toBeEnabled();
+  expect(usageReads).toBe(3);
+  expect(regens).toBe(1);
+});
+
 test("day editor loads saved override and sends manual fixed outfit", async ({
   page,
 }) => {
@@ -400,12 +656,7 @@ test("uncertain upload completion retries one logical garment with the same gran
   const creates: { key: string; upload_id: string }[] = [];
   await page.route("**/api/clothes/upload-url", (route) => {
     reserveCount++;
-    return route.fulfill({
-      json: {
-        upload_id: "44444444-4444-4444-8444-444444444444",
-        upload_url: "/api/uploads/44444444-4444-4444-8444-444444444444",
-      },
-    });
+    return route.fulfill({ json: uploadGrant });
   });
   await page.route("**/api/clothes", async (route) => {
     if (route.request().method() !== "POST") return route.fallback();

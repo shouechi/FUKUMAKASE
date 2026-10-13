@@ -85,6 +85,20 @@ UIは「まず試す」で `{onboarding_completed:true}` のみ送る。旧API�
 
 手動固定コーデが低温時に「アウターの追加をおすすめ」と警告された後、最低22°C・最高28°Cへ予報を更新する。`planWarnings` は既存警告を全コピーしてから新しい警告を加えるため、低温条件がなくなっても警告を除去しない。服の利用可否や予測洗濯の改善でも同じ問題が生じる。可変条件の警告は現在の状態から再計算し、固定の注記と区別する必要がある。
 
+### R16: 本番APIのURLにHTMLが返る
+
+2026-10-13に本番 `https://fukumakase.hajimete-1105.workers.dev` の `/api/outfits/today`・`/api/me/usage`・`/api/me/preferences` を認証なしで読み取り確認した。すべて200の `text/html`、リダイレクトなしで、APIの `X-Request-Id` もなく、本文は `<!DOCTYPE html>` だった。Web Workerは全パスを受ける画面を持つが、本番のAPI転送がなく、開発専用Viteプロキシは本番で動かない。JSONの成功応答としてそのまま解析していたため、英語の `Unexpected token '<'` が画面に表示された。
+
+Web WorkerのService Bindingから同一オリジンのAPI通信をHono Workerへ転送する。転送できない場合はJSONの503を返し、画面HTMLへ落とさない。認証ヘッダー・Origin・クエリ・本文・冪等キーは元のRequestのまま渡し、画像を含むResponseもそのまま返す。JSON・画像の認証と通信失敗処理を共通化し、JSONの媒体型・解析結果・共有契約を検証する。異常な本文や例外の原文を表示しない。変更結果が不明なHTML・不正JSON・通信断では冪等キーを保持する。
+
+本番形式ビルドをMiniflareでWeb・APIの2Workerとして起動し、同じ3つのAPIパスが401のJSON・`no-store`・`X-Request-Id` を返すこと、`/today` は画面HTMLを維持することを確認した。API公開用の想定 `workers.dev` URLは本番確認時404だったが、公開アクセス無効の可能性もあるためAPI自体が未配備と断定しない。クラウドへの配備・認証済み本番操作は今回のローカル検証の証拠に含めない。
+
+### R17: 再生成成功後の取得失敗で再生成を重ねる
+
+Today・Weekの再生成POSTが成功した後、利用回数GETだけがHTMLや通信断になると、旧画面は全体を更新失敗として案内していた。POSTは既に正常成功し冪等キーが破棄されているため、再生成をやり直すと別操作で枠を追加消費する。POST成功と後続の読み取りを分け、成功時に選択画面を閉じ、利用回数の再取得を共通処理する。読み取り失敗からはGETだけを再試行し、回復するまでは再生成を無効にする。独立E2Eは日次・週間でPOSTを1回だけ成功させ、後続GETのHTMLを経て正常回復してもPOSTが増えないことを要求する。
+
+2026-10-13の修正後検証: `pnpm typecheck` 成功、`pnpm test` は180件成功・接続未設定のDB/外部結合33件スキップ、`pnpm test:e2e` はPC/スマートフォンのChromiumで72件成功、`pnpm build:worker` 成功。画面試験のAuth/APIはネットワークfixtureであり、実メール・OAuth・認証済み本番操作の証拠ではない。独立した敵対的レビューでR17の修正と共通化を確認し、追加の実質不備は見つからなかった。本番への公開は行っていない。
+
 ## 検証の限界
 
 実HTTP結合試験を追加し、2026-10-11 16:33 JSTに5件すべて成功した。隔離したDocker PostgreSQL 16・GoTrue・PostgRESTへアプリの実マイグレーションを適用し、実パスワードログイン、JWT不正/期限切れ、RLS、関連取得、初期設定、着用再送/洗濯、Auth削除後のJWT拒否と匿名化を確認した。Hono入口もローカルNode HTTPサーバーを通して呼び、Auth/RESTも実HTTPである。Cloudflare実行環境・外部R2・実SMTPの証拠にはしない。再現手順と削除範囲は `tests/integration/README.md`。
