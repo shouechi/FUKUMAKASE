@@ -1,0 +1,28 @@
+# Optional: for local preview of the combined production Worker with Wrangler.
+# Copy to .dev.vars. Never commit .dev.vars or real server credentials.
+# Normal pnpm dev uses apps/api/.dev.vars instead.
+# Browser-safe NEXT_PUBLIC_* values belong in .env.local, not this file.
+SUPABASE_URL="https://YOUR_PROJECT.supabase.co"
+SUPABASE_ANON_KEY="YOUR_PUBLIC_ANON_KEY"
+SUPABASE_SERVICE_ROLE_KEY="YOUR_SERVER_ONLY_SERVICE_ROLE_KEY"
+APP_ORIGIN="http://localhost:8787"
+
+# Also disable new signups in Supabase Auth settings when pausing registration.
+SIGNUPS_ENABLED="true"
+UPLOADS_ENABLED="true"
+
+# Unset credentials/models/prices use deterministic rules without paid AI.
+# Enable only after inserting an ai_enabled service_budget row for the JST month.
+# Prices are USD per 1 million tokens; verify prices and reserve conservatively.
+OPENAI_API_KEY=""
+AI_MODEL_CLASSIFY=""
+AI_MODEL_OUTFIT=""
+AI_REQUEST_RESERVE_USD=""
+AI_INPUT_USD_PER_MILLION=""
+AI_OUTPUT_USD_PER_MILLION=""
+
+WEATHER_API_KEY=""
+WEATHER_FORECAST_DAYS="3"
+
+# CLOTHES_BUCKET is the private R2 binding in wrangler.jsonc.
+# Production server credentials are secrets on the fukumakase Worker.

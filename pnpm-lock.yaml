@@ -60,6 +60,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@outfit/api':
+        specifier: workspace:*
+        version: link:../api
       '@outfit/domain':
         specifier: workspace:*
         version: link:../../packages/domain

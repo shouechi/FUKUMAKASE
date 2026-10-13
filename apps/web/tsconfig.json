@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": {"jsx": "preserve", "plugins": [{"name":"next"}], "types": ["node"], "paths": {"@/*": ["./*"]}},
+  "compilerOptions": {"jsx": "preserve", "plugins": [{"name":"next"}], "types": ["node", "@cloudflare/workers-types"], "paths": {"@/*": ["./*"]}},
   "include": ["**/*.ts", "**/*.tsx", ".next/types/**/*.ts"], "exclude": ["node_modules", "dist"]
 }

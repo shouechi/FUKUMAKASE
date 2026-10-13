@@ -2,10 +2,12 @@
   "name": "@outfit/api",
   "private": true,
   "type": "module",
+  "exports": {
+    "./server": "./src/index.ts"
+  },
   "scripts": {
     "dev": "wrangler dev --port 8787",
-    "typecheck": "tsc --noEmit",
-    "deploy": "wrangler deploy"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@outfit/schemas": "workspace:*",

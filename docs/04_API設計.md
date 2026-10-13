@@ -1,5 +1,7 @@
 # Outfit App — Hono API設計 v1.1
-HonoをCloudflare Workers上のAPIとして独立配置。Next.jsとは`https://app.example.jp`→`/api/*`（Workers Routes経由でHonoへ）で同一オリジンにする構成を第一候補とする。開発時はローカル2サーバー。Zod/Hono RPCでリクエスト・レスポンスを型付け。
+2026-10-13の利用者指定により、画面とAPIの独立Worker配置から、1つのCloudflare Worker `fukumakase` へ統合する。Next.js/vinextとHono APIは同じWorker内で実行し、`/api`・`/api/*`・`/health` は既存Honoへ直接渡し、他のパスは画面へ渡す。別のAPI Worker、Workers RoutesによるAPI分離、Service Bindingは使わない。開発時はローカル2サーバーを維持する。Zod/Hono RPCでリクエスト・レスポンスを型付け。
+
+API・定期処理の実装は `apps/api` に集約し、Web Workerが同じ実装を利用する。`packages/schemas` の契約と `packages/domain` の業務ルールを維持し、画面用にAPI処理を複製しない。元のRequest（認証・Origin・本文・クエリ・冪等キー）とExecutionContextをHonoへ渡し、JSONと非公開画像のResponseをそのまま返す。APIのエラーを画面HTMLへフォールバックさせない。
 
 ## 認証と共通仕様
 - Supabase AuthのJWTを受け、プロジェクトで採用する署名方式に沿って署名・iss/aud/expを検証する（非対称鍵構成ならJWKSを利用）。ユーザーIDは検証済み`sub`から導出し、リクエストに含まれる`user_id`を信用しない。削除申請済み/アカウント不在のアクセスも拒否する。
@@ -30,6 +32,7 @@ HonoをCloudflare Workers上のAPIとして独立配置。Next.jsとは`https://
 
 ## 管理・定期処理（外部公開しない）
 - `scheduled` handler：日本時間で処理対象ユーザーを抽出し、期限内の日次調整・日曜夜の週間作成を進める。認証用HTTP管理エンドポイントは必要最小限。
+- `scheduled` は画面/APIと同じWorkerに配置し、`apps/api` の既存スケジューラへ委譲する。Cron、非公開R2バインディング、サーバー用Secretsも同じWorkerに設定する。旧API Workerからの切替時は旧Cronを先に停止し、2つのWorkerで定期処理を並行稼働させない（手順は `operations.md`）。
 - Cronはすべてのユーザーに同時処理をかけない。`generation_jobs`をリースで排他取得し、1回に少数件処理。失敗時は指数バックオフ。
 
 ## 入出力例

@@ -1,11 +1,10 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "fukumakase-api",
+  "name": "fukumakase-api-local",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": false },
-  "triggers": { "crons": ["*/10 * * * *"] },
   "r2_buckets": [
     {
       "binding": "CLOTHES_BUCKET",

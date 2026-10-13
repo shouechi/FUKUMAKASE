@@ -43,6 +43,29 @@ export class ApiError extends Error {
     super(message);
   }
 }
+/** A single safe JSON error format for Hono and the production Worker boundary. */
+export function apiErrorResponse(
+  error: ApiError,
+  requestId: string = crypto.randomUUID(),
+): Response {
+  return Response.json(
+    {
+      error: {
+        code: error.code,
+        message: error.message,
+        request_id: requestId,
+      },
+    },
+    {
+      status: error.status,
+      headers: {
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-Request-Id": requestId,
+      },
+    },
+  );
+}
 export async function result<T = any>(
   query: PromiseLike<{ data: T | null; error: any }>,
 ): Promise<T> {

@@ -35,6 +35,7 @@ import {
 } from "@outfit/domain";
 import {
   ApiError,
+  apiErrorResponse,
   result,
   type AppEnv,
   type Dependencies,
@@ -160,16 +161,7 @@ export function createApp(deps: Dependencies = {}) {
             503,
             "処理に失敗しました。少し待ってお試しください",
           );
-    return c.json(
-      {
-        error: {
-          code: e.code,
-          message: e.message,
-          request_id: c.get("requestId"),
-        },
-      },
-      e.status,
-    );
+    return apiErrorResponse(e, c.get("requestId"));
   });
   app.get("/health", (c) => c.json({ ok: true, service: "outfit-api" }));
   // The random deletion receipt permits progress after the account/JWT is removed.
