@@ -13,14 +13,14 @@ import {
   Check,
   Leaf,
 } from "lucide-react";
-import { api, authClient } from "../lib/client";
+import { authClient } from "../lib/client";
 import { AuthScreen, AuthCallback } from "./auth";
 import { PreferencesScreen } from "./preferences";
 import { Closet, NewClothing, ClothingDetail } from "./closet";
 import { Today, Week, DayEditor } from "./plans";
 import { History } from "./history";
 import { DeleteAccount, DeletionProgress, Legal } from "./legal";
-import { dateSchema, type PreferencesResponse } from "@outfit/schemas";
+import { dateSchema } from "@outfit/schemas";
 import { Loading, Notice } from "./ui";
 const tabs = [
   ["/today", "今日", Sun],
@@ -33,7 +33,6 @@ export function App() {
   const path = usePathname() || "/";
   const router = useRouter();
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
-  const [authError, setAuthError] = useState("");
   const publicRoute = [
     "/",
     "/login",
@@ -67,12 +66,6 @@ export function App() {
       router.replace("/login");
       return;
     }
-    if (path === "/today")
-      api("GET /api/me/preferences")
-        .then((p) => {
-          if (p.onboarding_completed === false) router.replace("/onboarding");
-        })
-        .catch((e) => setAuthError(e.message));
   }, [path, publicRoute, authenticated, router]);
   let content;
   if (path === "/") content = <Landing />;
@@ -164,7 +157,6 @@ export function App() {
         )}
       </header>
       <main id="main" className={path === "/" ? "landing-main" : "main"}>
-        {authError && !publicRoute && <Notice kind="error">{authError}</Notice>}
         {content}
       </main>
       {!publicRoute && authenticated && (

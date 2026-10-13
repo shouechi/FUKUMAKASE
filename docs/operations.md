@@ -29,7 +29,11 @@ OpenAI/天気のキーがなくても、ルールベース提案・季節の暫�
 
 各環境に別Supabaseプロジェクト、R2非公開バケット、WorkersとSecretsを用意します。誤って本番のサービスキーを開発環境へ置かないでください。実際の公開先が確定するまではデプロイを行いません。
 
-Webは `apps/web/wrangler.jsonc`、APIは `apps/api/wrangler.jsonc` が基礎設定です。API Workerへ同じドメインの `/api/*` のWorkers Routeを割り当て、Web Workerは残りを配信します。Cloudflareダッシュボードでドメイン、Worker名、環境別バケット名を確認して設定します。WebのVite開発プロキシは本番ルーティングを代替しません。
+Webは `apps/web/wrangler.jsonc`、APIは `apps/api/wrangler.jsonc` が基礎設定です。Web WorkerはService Binding `API` で `fukumakase-api` に接続し、同一オリジンの `/api`・`/api/*` の通信を転送します。`workers.dev` でも同じ経路を使用します。CloudflareダッシュボードでWorker名、環境別バケット名を確認してください。環境別にAPI Worker名を変更する場合はWebのService Bindingの接続先も合わせます。WebのVite開発プロキシは本番接続を代替しません。
+
+初回公開では、非公開R2バケットとSupabaseのマイグレーションを用意し、API Workerの `SUPABASE_URL`・`SUPABASE_ANON_KEY`・`SUPABASE_SERVICE_ROLE_KEY`・`APP_ORIGIN` を設定して、`pnpm --filter @outfit/api deploy` でAPIを先に公開します。`APP_ORIGIN` はWebの本番オリジン（パスを含めない）です。今回のWeb公開先の場合は `https://fukumakase.hajimete-1105.workers.dev` を指定します。Secretsは対話式の `wrangler secret put` 等で設定し、値をコマンド引数やログへ残さないでください。API Workerが存在してからWebをビルド・公開します。これらは公開担当者が実施する手順であり、コード修正やローカルビルドの成功だけで実施済みとは扱いません。
+
+接続確認はWebの本番URLの `/api/me/preferences` に認証なしでGETします。設定済みなら401のJSON、APIの接続設定が不足していれば503のJSONが返ります。200の `text/html` はAPIの通信がWeb画面へ届いている状態です。APIの公開用 `workers.dev` URLが404でも、公開アクセスを無効にしたWorkerはService Bindingで接続できるため、それだけでAPI Workerが存在しないとは判定しません。続いて認証済みの画面・画像・更新の実機確認を行ってください。
 
 CloudflareのWeb Worker名は `fukumakase`、本番ブランチは `main` とします。Build commandは `pnpm build:worker`、Deploy commandは `pnpm --filter @outfit/web exec wrangler deploy --config dist/server/wrangler.json` を設定します。MVPでは自動Preview Buildsを無効にし、mainのみ本番へ自動デプロイします。検証環境は本番と分離し、必要時に手動運用します。
 

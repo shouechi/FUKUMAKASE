@@ -119,6 +119,10 @@ export function ClothingImage({ cloth }: { cloth: Cloth }) {
           src={src}
           alt={`${cloth.color}の${categoryLabels[cloth.category]}`}
           loading="lazy"
+          onError={() => {
+            setSrc("");
+            setFailed(true);
+          }}
         />
       ) : (
         <div className="image-placeholder">
@@ -147,7 +151,9 @@ export function ClothCard({
         {cloth.classification_state === "pending" && (
           <span className="tag">AIで分類中</span>
         )}
-        {(cloth.classification_state === 'review' || (cloth.classification_state==='manual' && (!cloth.seasons.length || cloth.color==='unknown'))) && (
+        {(cloth.classification_state === "review" ||
+          (cloth.classification_state === "manual" &&
+            (!cloth.seasons.length || cloth.color === "unknown"))) && (
           <span className="tag">分類を確認してください</span>
         )}
         {footer}

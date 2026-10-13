@@ -189,106 +189,142 @@ export const aiOutfitSchema = z
 export type Category = z.infer<typeof categorySchema>;
 export type Season = z.infer<typeof seasonSchema>;
 export type Preferences = z.infer<typeof preferencesSchema>;
-export type DayOverride = z.infer<typeof overrideSchema> & {
-  target_date: string;
-};
+// Responses validate their declared fields while allowing database-added columns.
+// Response schemas never fill request defaults or coerce malformed values.
+export const dayOverrideSchema = z.object({
+  is_workday: overrideSchema.shape.is_workday,
+  occasion: overrideSchema.shape.occasion.removeDefault(),
+  mood: overrideSchema.shape.mood.removeDefault(),
+  target_date: dateSchema,
+});
+export type DayOverride = z.infer<typeof dayOverrideSchema>;
 export type OutfitItem = z.infer<typeof outfitItemSchema>;
-export interface Cloth {
-  id: string;
-  user_id?: string;
-  image_key?: string;
-  category: Category;
-  subtype: string;
-  color: string;
-  seasons: Season[];
-  thickness: "thin" | "normal" | "thick" | null;
-  wear_limit: number;
-  wears_since_wash: number;
-  state: "available" | "laundry";
-  is_available?: boolean;
-  classification_state: "pending" | "classified" | "manual" | "review";
-  deleted_at?: string | null;
-  last_worn_at?: string | null;
-}
-export interface Weather {
-  date: string;
-  min_c: number;
-  max_c: number;
-  rain_probability: number;
-  source: "live" | "cache" | "seasonal";
-  fetched_at: string | null;
-  provisional: boolean;
-}
-export interface Plan {
-  id?: string;
-  target_date: string;
-  outfit_id?: string | null;
-  mode: "auto" | "manual_lock";
-  plan_status: "proposed" | "partial" | "confirmed" | "skipped";
-  source: "ai" | "rule" | "manual";
-  reason_short: string;
-  items: (OutfitItem & { clothes?: Cloth })[];
-  warnings: string[];
-  weather?: Weather;
-}
+export const clothSchema = z.object({
+  id: z.uuid(),
+  user_id: z.uuid().optional(),
+  image_key: z.string().optional(),
+  category: categorySchema,
+  subtype: classificationSchema.shape.subtype,
+  color: classificationSchema.shape.color,
+  // Pending/manual classification can have no seasons yet.
+  seasons: z.array(seasonSchema).max(4),
+  thickness: clothesPatchSchema.shape.thickness.unwrap(),
+  wear_limit: clothesPatchSchema.shape.wear_limit.unwrap(),
+  wears_since_wash: z.number().int().nonnegative(),
+  state: clothesPatchSchema.shape.state.unwrap(),
+  is_available: z.boolean().optional(),
+  classification_state: z.enum(["pending", "classified", "manual", "review"]),
+  deleted_at: z.iso.datetime({ offset: true }).nullable().optional(),
+  last_worn_at: z.iso.datetime({ offset: true }).nullable().optional(),
+});
+export type Cloth = z.infer<typeof clothSchema>;
+export const weatherSchema = z.object({
+  date: dateSchema,
+  min_c: z.number(),
+  max_c: z.number(),
+  rain_probability: z.number().min(0).max(100),
+  source: z.enum(["live", "cache", "seasonal"]),
+  fetched_at: z.iso.datetime({ offset: true }).nullable(),
+  provisional: z.boolean(),
+});
+export type Weather = z.infer<typeof weatherSchema>;
+export const planSchema = z.object({
+  id: z.uuid().optional(),
+  target_date: dateSchema,
+  outfit_id: z.uuid().nullable().optional(),
+  mode: z.enum(["auto", "manual_lock"]),
+  plan_status: z.enum(["proposed", "partial", "confirmed", "skipped"]),
+  source: z.enum(["ai", "rule", "manual"]),
+  reason_short: z.string(),
+  items: z.array(outfitItemSchema.extend({ clothes: clothSchema.optional() })),
+  warnings: z.array(z.string()),
+  weather: weatherSchema.optional(),
+});
+export type Plan = z.infer<typeof planSchema>;
 export const wearLimits: Record<Category, number> = {
   top: 1,
   bottom: 3,
   shoes: 10,
   outerwear: 5,
 };
-export interface PreferencesResponse extends Preferences {
-  onboarding_completed: boolean;
-}
-export interface DayOverrideResponse {
-  override: DayOverride | null;
-}
-export interface DeletionReceipt {
-  status: "deleting";
-  job_id: string;
-}
-export interface DeletionStatus {
-  status: "deleting" | "completed" | "retry_required";
-}
-export interface Usage {
-  daily_regens_remaining: number;
-  weekly_regens_remaining: number;
-  daily_reset_at: string;
-  weekly_reset_at: string;
-}
-export interface WearLog {
-  id: string;
-  target_date: string;
-  outfit_id: string;
-  confirmed_at: string;
-  items: { clothes_id: string; clothes: Cloth }[];
-}
-export interface WeeklyPlans {
-  week: string;
-  days: Plan[];
-  weekly_regens_remaining?: number;
-}
-export interface ClothesPage {
-  items: Cloth[];
-  total: number;
-  page: number;
-  limit: number;
-}
-export interface WeekdaysResponse {
-  weekdays: number[];
-}
-export interface WearLogsResponse {
-  items: WearLog[];
-}
-export interface WearReceipt {
-  id: string;
-  target_date: string;
-  outfit_id: string;
-  confirmed_at: string;
-}
-export interface OkResponse {
-  ok: true;
-}
+export const preferencesResponseSchema = preferencesSchema.extend({
+  onboarding_completed: z.boolean(),
+});
+export type PreferencesResponse = z.infer<typeof preferencesResponseSchema>;
+export const dayOverrideResponseSchema = z.object({
+  override: dayOverrideSchema.nullable(),
+});
+export type DayOverrideResponse = z.infer<typeof dayOverrideResponseSchema>;
+export const deletionReceiptSchema = z.object({
+  status: z.literal("deleting"),
+  job_id: z.uuid(),
+});
+export type DeletionReceipt = z.infer<typeof deletionReceiptSchema>;
+export const deletionStatusSchema = z.object({
+  status: z.enum(["deleting", "completed", "retry_required"]),
+});
+export type DeletionStatus = z.infer<typeof deletionStatusSchema>;
+export const usageSchema = z.object({
+  daily_regens_remaining: z.number().int().nonnegative(),
+  weekly_regens_remaining: z.number().int().nonnegative(),
+  daily_reset_at: z.iso.datetime({ offset: true }),
+  weekly_reset_at: z.iso.datetime({ offset: true }),
+});
+export type Usage = z.infer<typeof usageSchema>;
+export const wearReceiptSchema = z.object({
+  id: z.uuid(),
+  target_date: dateSchema,
+  outfit_id: z.uuid(),
+  confirmed_at: z.iso.datetime({ offset: true }),
+});
+export type WearReceipt = z.infer<typeof wearReceiptSchema>;
+export const wearLogSchema = wearReceiptSchema.extend({
+  items: z.array(z.object({ clothes_id: z.uuid(), clothes: clothSchema })),
+});
+export type WearLog = z.infer<typeof wearLogSchema>;
+export const weeklyPlansSchema = z.object({
+  week: dateSchema,
+  days: z.array(planSchema),
+  weekly_regens_remaining: z.number().int().nonnegative().optional(),
+});
+export type WeeklyPlans = z.infer<typeof weeklyPlansSchema>;
+export const clothesPageSchema = z.object({
+  items: z.array(clothSchema),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  limit: z.number().int().positive(),
+});
+export type ClothesPage = z.infer<typeof clothesPageSchema>;
+export const weekdaysResponseSchema = weekdaysSchema;
+export type WeekdaysResponse = z.infer<typeof weekdaysResponseSchema>;
+export const wearLogsResponseSchema = z.object({
+  items: z.array(wearLogSchema),
+});
+export type WearLogsResponse = z.infer<typeof wearLogsResponseSchema>;
+export const okResponseSchema = z.object({ ok: z.literal(true) });
+export type OkResponse = z.infer<typeof okResponseSchema>;
+export const uploadGrantSchema = z.object({
+  upload_id: z.uuid(),
+  upload_url: z.string().min(1),
+  method: z.literal("PUT"),
+  expires_at: z.iso.datetime({ offset: true }),
+  headers: z.object({ "Content-Type": z.literal("image/webp") }),
+});
+export type UploadGrant = z.infer<typeof uploadGrantSchema>;
+export const uploadReceiptSchema = okResponseSchema.extend({
+  upload_id: z.uuid(),
+});
+export const regeneratedPlanSchema = planSchema.extend({
+  daily_regens_remaining: z.number().int().nonnegative(),
+});
+export const apiErrorResponseSchema = z.object({
+  error: z.object({
+    code: z.string().min(1),
+    message: z.string().min(1),
+    request_id: z.string().min(1),
+    details: z.unknown().optional(),
+  }),
+});
 type Endpoint<Request, Response> = { request: Request; response: Response };
 /** Canonical HTTP contract. Dynamic segments are supplied separately by callers. */
 export interface ApiContract {
@@ -306,7 +342,7 @@ export interface ApiContract {
   >;
   "DELETE /api/me/day-overrides/:date": Endpoint<never, OkResponse>;
   "POST /api/clothes/upload-url": Endpoint<Record<string, never>, UploadGrant>;
-  "PUT /api/uploads/:id": Endpoint<Blob, OkResponse & { upload_id: string }>;
+  "PUT /api/uploads/:id": Endpoint<Blob, z.infer<typeof uploadReceiptSchema>>;
   "POST /api/clothes": Endpoint<ClothesCreate, Cloth>;
   "GET /api/clothes": Endpoint<never, ClothesPage>;
   "GET /api/clothes/:id": Endpoint<never, Cloth>;
@@ -316,7 +352,7 @@ export interface ApiContract {
   "GET /api/outfits/today": Endpoint<never, Plan | null>;
   "POST /api/outfits/today/regenerate": Endpoint<
     z.infer<typeof regenSchema>,
-    Plan & { daily_regens_remaining: number }
+    z.infer<typeof regeneratedPlanSchema>
   >;
   "GET /api/plans/weekly": Endpoint<never, WeeklyPlans>;
   "POST /api/plans/weekly/regenerate": Endpoint<
@@ -341,13 +377,36 @@ export interface ApiContract {
 export type ApiEndpoint = keyof ApiContract;
 export type ApiRequest<K extends ApiEndpoint> = ApiContract[K]["request"];
 export type ApiResponse<K extends ApiEndpoint> = ApiContract[K]["response"];
-export interface UploadGrant {
-  upload_id: string;
-  upload_url: string;
-  method: "PUT";
-  expires_at: string;
-  headers: { "Content-Type": "image/webp" };
-}
+/** Every JSON endpoint has a shared runtime response validator. */
+export const apiResponseSchemas = {
+  "GET /api/me/preferences": preferencesResponseSchema,
+  "PATCH /api/me/preferences": preferencesResponseSchema,
+  "GET /api/me/work-weekdays": weekdaysResponseSchema,
+  "PUT /api/me/work-weekdays": weekdaysResponseSchema,
+  "GET /api/me/day-overrides/:date": dayOverrideResponseSchema,
+  "PUT /api/me/day-overrides/:date": dayOverrideSchema,
+  "DELETE /api/me/day-overrides/:date": okResponseSchema,
+  "POST /api/clothes/upload-url": uploadGrantSchema,
+  "PUT /api/uploads/:id": uploadReceiptSchema,
+  "POST /api/clothes": clothSchema,
+  "GET /api/clothes": clothesPageSchema,
+  "GET /api/clothes/:id": clothSchema,
+  "PATCH /api/clothes/:id": clothSchema,
+  "DELETE /api/clothes/:id": okResponseSchema,
+  "POST /api/clothes/:id/washed": clothSchema,
+  "GET /api/outfits/today": planSchema.nullable(),
+  "POST /api/outfits/today/regenerate": regeneratedPlanSchema,
+  "GET /api/plans/weekly": weeklyPlansSchema,
+  "POST /api/plans/weekly/regenerate": weeklyPlansSchema,
+  "PUT /api/plans/:date": planSchema,
+  "POST /api/wear-logs": wearReceiptSchema,
+  "GET /api/wear-logs": wearLogsResponseSchema,
+  "GET /api/wear-logs/:date": wearLogSchema,
+  "PATCH /api/wear-logs/:date": wearReceiptSchema,
+  "GET /api/me/usage": usageSchema,
+  "POST /api/account/delete": deletionReceiptSchema,
+  "GET /api/account/deletion-status/:id": deletionStatusSchema,
+} satisfies { [K in ApiEndpoint]: z.ZodType<ApiResponse<K>> };
 export type ClothesPatch = z.infer<typeof clothesPatchSchema>;
 export type ClothesCreate = z.infer<typeof clothesCreateSchema>;
 export const limits = {
