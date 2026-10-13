@@ -1,5 +1,5 @@
 import handler from "vinext/server/fetch-handler";
-import { proxyApiRequest, type ApiProxyEnv } from "./server/api-proxy";
+import api, { ApiError, apiErrorResponse, type Env } from "@outfit/api/server";
 
 export * from "vinext/server/fetch-handler";
 
@@ -7,10 +7,25 @@ export default {
   ...handler,
   async fetch(
     request: Request,
-    env: ApiProxyEnv,
-    ctx: unknown,
+    env: Env,
+    ctx: ExecutionContext,
   ): Promise<Response> {
-    const response = await proxyApiRequest(request, env);
-    return response ?? handler.fetch(request, env, ctx);
+    const path = new URL(request.url).pathname;
+    if (path === "/api" || path.startsWith("/api/") || path === "/health") {
+      try {
+        return await api.fetch(request, env, ctx);
+      } catch {
+        // Unexpected failures must not expose credentials or render an HTML page.
+        return apiErrorResponse(
+          new ApiError(
+            "API_UNAVAILABLE",
+            503,
+            "データを取得できませんでした。少し待って、もう一度お試しください。",
+          ),
+        );
+      }
+    }
+    return handler.fetch(request, env, ctx);
   },
+  scheduled: api.scheduled,
 };

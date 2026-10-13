@@ -7,10 +7,12 @@
 1. Node.js 24とpnpmを用意し、ルートで `pnpm install --frozen-lockfile` を実行します。
 2. `apps/web/.env.example` を `.env.local`、`apps/api/.dev.vars.example` を `.dev.vars` にコピーし、Supabaseの検証環境の値を設定します。両方のURL・公開キーは同じプロジェクトを指定します。`service_role` はAPIのみに置きます。
 3. Supabase検証DBへマイグレーションを順に適用します。Supabase CLIの `supabase db push` を使用する場合はリンク先が検証環境であることを確認します。`tests/database/bootstrap.sql` はローカルPostgreSQL専用で、本物のSupabaseへ適用しません。
-4. Supabase AuthのSite URLとRedirect URLsに `http://127.0.0.1:3000/auth/callback`、パスワード再設定の同URLクエリ付きパスを許可します。Web/APIの `APP_ORIGIN` は同じオリジンにします。Googleログインを使う場合はGoogle OAuthプロバイダも設定します。
-5. `pnpm dev` でWeb/APIを起動します。R2はローカルエミュレーションに保存します。Cronを試す際は別途APIを `wrangler dev --test-scheduled` で起動し、開発用scheduledエンドポイントを使います。通常のAPIにはCron実行HTTP管理パスを公開しません。
+4. Supabase AuthのSite URLとRedirect URLsに `http://127.0.0.1:3000/auth/callback`、パスワード再設定の同URLクエリ付きパスを許可します。APIの `APP_ORIGIN` は `http://127.0.0.1:3000` にします。Googleログインを使う場合はGoogle OAuthプロバイダも設定します。
+5. `pnpm dev` で従来どおりWeb/APIの2サーバーを起動します。本番は1Workerですが、ローカル開発ではWebのViteプロキシから同じAPI実装へ接続します。R2はローカルエミュレーションに保存します。Cronを試す際は別途 `pnpm --filter @outfit/api exec wrangler dev --test-scheduled` でAPIを起動し、開発用scheduledエンドポイントを使います。通常のAPIにはCron実行HTTP管理パスを公開しません。`apps/api/wrangler.jsonc` はローカル専用で、本番へ単独デプロイしません。
 
 OpenAI/天気のキーがなくても、ルールベース提案・季節の暫定天気・手動分類を使えます。本人データの保存にはSupabaseの接続が必要です。写真分類は応答後のバックグラウンド処理で試行し、失敗はCronが再試行します。
+
+統合WorkerをWranglerでローカル検証する場合のサーバー設定例は `apps/web/.dev.vars.example` です。通常の `pnpm dev` ではAPI側の `.dev.vars` を使います。ブラウザ用公開値は引き続き `apps/web/.env.local` に置き、サーバー専用の値は `.env.local` の `NEXT_PUBLIC_*` に混ぜません。検証するURLに合わせて `APP_ORIGIN` とSupabaseのリダイレクト許可を設定してください。
 
 ## テストの証拠を分ける
 
@@ -27,19 +29,46 @@ OpenAI/天気のキーがなくても、ルールベース提案・季節の暫�
 
 ## 検証環境・本番環境
 
-各環境に別Supabaseプロジェクト、R2非公開バケット、WorkersとSecretsを用意します。誤って本番のサービスキーを開発環境へ置かないでください。実際の公開先が確定するまではデプロイを行いません。
+各環境に別Supabaseプロジェクト、R2非公開バケット、1つのWorkerとSecretsを用意します。誤って本番のサービスキーを開発環境へ置かないでください。実際の公開先が確定するまではデプロイを行いません。
 
-Webは `apps/web/wrangler.jsonc`、APIは `apps/api/wrangler.jsonc` が基礎設定です。Web WorkerはService Binding `API` で `fukumakase-api` に接続し、同一オリジンの `/api`・`/api/*` の通信を転送します。`workers.dev` でも同じ経路を使用します。CloudflareダッシュボードでWorker名、環境別バケット名を確認してください。環境別にAPI Worker名を変更する場合はWebのService Bindingの接続先も合わせます。WebのVite開発プロキシは本番接続を代替しません。
+本番の基礎設定は `apps/web/wrangler.jsonc` です。Worker `fukumakase` が画面、Hono API、定期処理を実行します。`/api`・`/api/*`・`/health` は既存Honoへ直接渡し、それ以外はvinextへ渡します。静的ファイルがAPIを覆わないよう、これらのパスは `assets.run_worker_first` にも指定します。元のRequestとExecutionContextを渡すため、認証・Origin・本文・クエリ・冪等キー・応答後の処理を保持します。別のAPI WorkerやService Bindingは不要です。`apps/api` は同じAPI実装の正本とローカル開発用で、単独の本番公開は行いません。
 
-初回公開では、非公開R2バケットとSupabaseのマイグレーションを用意し、API Workerの `SUPABASE_URL`・`SUPABASE_ANON_KEY`・`SUPABASE_SERVICE_ROLE_KEY`・`APP_ORIGIN` を設定して、`pnpm --filter @outfit/api deploy` でAPIを先に公開します。`APP_ORIGIN` はWebの本番オリジン（パスを含めない）です。今回のWeb公開先の場合は `https://fukumakase.hajimete-1105.workers.dev` を指定します。Secretsは対話式の `wrangler secret put` 等で設定し、値をコマンド引数やログへ残さないでください。API Workerが存在してからWebをビルド・公開します。これらは公開担当者が実施する手順であり、コード修正やローカルビルドの成功だけで実施済みとは扱いません。
+初回公開では非公開R2バケットとSupabaseのマイグレーションを用意し、Worker `fukumakase` の「Settings → Variables and Secrets」にサーバー用設定を登録します。最低限必要な設定は次です。
 
-接続確認はWebの本番URLの `/api/me/preferences` に認証なしでGETします。設定済みなら401のJSON、APIの接続設定が不足していれば503のJSONが返ります。200の `text/html` はAPIの通信がWeb画面へ届いている状態です。APIの公開用 `workers.dev` URLが404でも、公開アクセスを無効にしたWorkerはService Bindingで接続できるため、それだけでAPI Workerが存在しないとは判定しません。続いて認証済みの画面・画像・更新の実機確認を行ってください。
+| 名前 | 設定先・内容 |
+|---|---|
+| `SUPABASE_URL` | 統合Workerの実行時設定。同じプロジェクトの `NEXT_PUBLIC_SUPABASE_URL` と一致させる |
+| `SUPABASE_ANON_KEY` | 統合Workerの実行時設定。同じプロジェクトの `NEXT_PUBLIC_SUPABASE_ANON_KEY` と一致させる |
+| `SUPABASE_SERVICE_ROLE_KEY` | 統合WorkerのSecret。サーバー専用キー |
+| `APP_ORIGIN` | 統合Workerの実行時設定。本番のオリジン（パスを含めない）：`https://fukumakase.hajimete-1105.workers.dev` |
 
-CloudflareのWeb Worker名は `fukumakase`、本番ブランチは `main` とします。Build commandは `pnpm build:worker`、Deploy commandは `pnpm --filter @outfit/web exec wrangler deploy --config dist/server/wrangler.json` を設定します。MVPでは自動Preview Buildsを無効にし、mainのみ本番へ自動デプロイします。検証環境は本番と分離し、必要時に手動運用します。
+すべてSecretとして登録しても構いません。CLIを使う場合は対話式の `pnpm --filter @outfit/web exec wrangler secret put SUPABASE_SERVICE_ROLE_KEY --config wrangler.jsonc` 等で設定します。値をコマンド引数やログへ残さないでください。OpenAI/天気のキーとモデル/料金の設定、受付スイッチも統合Workerに置きます。AIを使うには当月の予算有効化が別途必要です。
 
-Web公開ビルド時の `NEXT_PUBLIC_SUPABASE_URL`・`NEXT_PUBLIC_SUPABASE_ANON_KEY` はクライアントへ埋め込まれる公開値です。秘密鍵を `NEXT_PUBLIC_*` に置かないでください。APIの `.dev.vars` は本番では使用されないため、必要な値をWrangler Secretsで設定します。
+手動公開はリポジトリのルートから次の1コマンドでビルド・公開します。
 
-APIのCloudflareバインディングは非公開の `CLOTHES_BUCKET`。R2のr2.dev公開アクセスとカスタム公開ドメインは無効にします。画像のPUT/GETは期限付きアップロード予約と認証済みAPIで行い、所有権チェックと `no-store` を通します。公開バケットや永続公開URLは使いません。
+```sh
+pnpm --filter @outfit/web run deploy
+```
+
+CloudflareのWorker名は `fukumakase`、本番ブランチは `main` とします。Git連携のRoot directoryはリポジトリのルート、Build commandは `pnpm build:worker`、Deploy commandは `pnpm --filter @outfit/web exec wrangler deploy --config dist/server/wrangler.json` を設定します。MVPでは自動Preview Buildsを無効にし、mainのみ本番へ自動デプロイします。検証環境は本番と分離し、必要時に手動運用します。
+
+Web公開ビルド時の `NEXT_PUBLIC_SUPABASE_URL`・`NEXT_PUBLIC_SUPABASE_ANON_KEY` はクライアントへ埋め込まれる公開値です。APIの `SUPABASE_URL`・`SUPABASE_ANON_KEY` は別名の実行時設定なので、公開値だけをビルドに設定してもAPI接続は構成されません。秘密鍵を `NEXT_PUBLIC_*` に置かないでください。APIの `.dev.vars` は本番では使用されず、旧API WorkerのSecretsも自動移行されません。
+
+統合Workerの `CLOTHES_BUCKET` は既存の非公開R2バケット `fukumakase-private-clothes` に接続します。写真のコピーやバケット再作成は不要です。R2のr2.dev公開アクセスとカスタム公開ドメインは無効にします。画像のPUT/GETは期限付きアップロード予約と認証済みAPIで行い、所有権チェックと `no-store` を通します。公開バケットや永続公開URLは使いません。
+
+接続確認は本番の `/health` が稼働確認のJSONを返すこと、`/today` が画面HTMLを返すことを確認します。`/api/me/preferences` に認証なしでGETすると、設定済みなら401のJSON、APIの接続設定不足なら503のJSONが返ります。200の `text/html` が返る場合は振分けが正しくないため、公開を完了扱いにしません。続いて認証済みの画面・画像・更新と、統合WorkerのCron実行を実機で確認してください。コード修正やローカルビルドの成功だけで公開確認済みとは扱いません。
+
+### 既存の2Worker構成からの切替
+
+旧 `fukumakase-api` はコード変更だけでは消えません。旧Cronの停止と統合Workerの設定は、本番を変更する公開担当者の作業です。mainへのマージで自動公開が始まるため、次の準備をマージ・手動公開より前に済ませます。
+
+1. 統合先 `fukumakase` に上記のSupabase設定・サーバーSecretsを登録し、既存のR2バケット名を確認します。旧API Workerに設定がある場合も統合先へ再設定します。Secretsをリポジトリやログへコピーしません。
+2. Cloudflareで旧 `fukumakase-api` のCron Triggersを停止します。Wrangler管理では旧Workerを対象とした設定の `triggers.crons` を空配列にして反映します。Cronの変更・削除には最大15分の反映時間があるため、反映を待ち、旧処理の完了も確認します。[CloudflareのCron削除・伝播仕様](https://developers.cloudflare.com/workers/configuration/cron-triggers/#remove-a-cron-trigger)
+3. 旧WorkerへデプロイするGit連携や外部ジョブがある場合は停止し、旧Cronが再設定されないようにします。このリポジトリのAPIローカル設定を変更しただけでは、既に配備済みの旧Cronは停止しません。
+4. mainへマージして自動公開するか、上記のWeb deployコマンドで統合Workerを公開します。`fukumakase` の `*/10 * * * *` だけが稼働する状態を確認します。移行により定期処理の停止時間があるため、朝の締切などを避けて行います。
+5. `/health`・APIのJSON・ログイン後の表示・非公開画像・更新・Cronを確認します。統合後はAPI用Workerの運用は不要です。旧 `fukumakase-api` の削除は確認後の別作業とし、コード作業で自動削除しません。旧Workerへ誤って秘密設定を追加しても統合先には反映されません。
+
+戻す場合も、統合WorkerのCronを先に止めて反映・処理完了を確認し、旧構成を復元してから旧Cronを再開します。2つのCronを同時稼働させません。停止・公開・検証の対象と結果をリリース記録へ残してください。
 
 Supabaseではメール確認、以下のパスワード要件、Google OAuth、カスタムSMTP、レート制限、許可リダイレクトURLを構成します。メール認証・再設定は実在する検証用アカウントで動作確認し、認証情報は独自DBへ転記しません。
 

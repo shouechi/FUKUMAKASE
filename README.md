@@ -1,6 +1,6 @@
 # フクマカセ — Outfit App MVP
 
-登録済みの服から、仕事に着ていく今日の一組を決める日本語Web/PWA。Next.js App Router（vinext）、Hono Workers、Supabase Auth/PostgreSQL、非公開R2で構成します。
+登録済みの服から、仕事に着ていく今日の一組を決める日本語Web/PWA。Next.js App Router（vinext）とHono APIを1つのCloudflare Worker `fukumakase` で動かし、Supabase Auth/PostgreSQL、非公開R2へ接続します。画面・API・定期処理の公開と設定は1つのWorkerにまとめます。
 
 ## 起動
 
@@ -18,7 +18,17 @@ cp apps/api/.dev.vars.example apps/api/.dev.vars
 pnpm dev
 ```
 
-Webは `http://127.0.0.1:3000`、Hono APIは `http://127.0.0.1:8787`。Webの `/api` は開発プロキシ経由でAPIへ接続します。R2はWranglerのローカルストレージです。詳しい設定・公開手順は [運用手順](docs/operations.md) を参照してください。
+ローカル開発ではWebは `http://127.0.0.1:3000`、Hono APIは `http://127.0.0.1:8787` の2サーバーを使います。Webの `/api` は開発プロキシ経由でAPIへ接続します。R2はWranglerのローカルストレージです。本番は同じAPI実装をWorker内で直接呼び出すため、API用WorkerやService Bindingは不要です。詳しい設定・公開手順は [運用手順](docs/operations.md) を参照してください。
+
+## 本番への公開
+
+非公開R2とSupabaseを準備し、Worker `fukumakase` にサーバー用のSecretsを設定してから公開します。
+
+```sh
+pnpm --filter @outfit/web run deploy
+```
+
+`apps/api` は共通のAPI実装とローカル開発用です。APIだけを本番に公開する手順はありません。既存の `fukumakase-api` がある環境は、mainへのマージ・自動公開より前に旧Cronを停止するなど、[統合への切替手順](docs/operations.md#既存の2worker構成からの切替)を実施してください。コードの変更だけでは、旧Workerの停止・削除やSecretsの移行は行われません。
 
 ## 検証
 
@@ -44,8 +54,8 @@ pnpm test:e2e
 
 ## 構成とSSoT
 
-- `apps/web`：画面、写真圧縮、認証UI。
-- `apps/api`：認証済みAPI、非公開画像、AI/天気の接続、定期処理。
+- `apps/web`：画面、写真圧縮、認証UI、画面/API/Cronをまとめる本番Worker。
+- `apps/api`：Web Workerから共有する認証済みAPI、非公開画像、AI/天気の接続、定期処理。単独起動はローカル開発用。
 - `packages/schemas`：APIの共通契約・検証・型・列挙値・初期値。
 - `packages/domain`：日付、祝日、勤務日、服選定の共通業務ルール。
 - `supabase/migrations`：DB構造・RLS・原子的な着用、上限、予算、ジョブ処理。

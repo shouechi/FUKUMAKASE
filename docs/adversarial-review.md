@@ -99,6 +99,16 @@ Today・Weekの再生成POSTが成功した後、利用回数GETだけがHTMLや
 
 2026-10-13の修正後検証: `pnpm typecheck` 成功、`pnpm test` は180件成功・接続未設定のDB/外部結合33件スキップ、`pnpm test:e2e` はPC/スマートフォンのChromiumで72件成功、`pnpm build:worker` 成功。画面試験のAuth/APIはネットワークfixtureであり、実メール・OAuth・認証済み本番操作の証拠ではない。独立した敵対的レビューでR17の修正と共通化を確認し、追加の実質不備は見つからなかった。本番への公開は行っていない。
 
+### R18: 画面・API・定期処理の単一Worker統合
+
+2026-10-13の利用者指定により、正本04/06と実装を1つのWorker `fukumakase` へ変更した。入口から既存Hono実装を直接呼び、`scheduled` も既存スケジューラへ委譲する。元のRequest・Env・ExecutionContextを渡し、JWT認証、Origin、入力、画像所有権、冪等キー、応答後のジョブの処理は共通実装を維持した。Service Bindingは廃止し、R2・Cron・運用変数を統合Workerに集約した。API/healthは静的assetよりWorkerを先に実行する。
+
+独立した受入テスト35件は、実Worker入口と既存Honoに外部Auth/DB/R2の固定応答を注入して、画面/APIの振分け、未知APIのJSON、認証失敗、Origin拒否、IDOR、変更本文・冪等キーの維持、画像Responseの保持、秘密を出さないJSONエラー、`waitUntil` とCron設定を検証した。独立した敵対的レビューでP0/P1/P2の追加指摘はなかった。
+
+修正後の `pnpm typecheck` と `pnpm build:worker` は成功。`pnpm test` は202件成功・DB/外部結合33件スキップ、別途 `pnpm test:db` で一時実PostgreSQLの28件成功、`pnpm test:e2e` はPC/スマートフォンの72件成功。ブラウザAuth/APIと受入テストの外部境界は固定応答であり、実Supabase認証・クラウドR2を検証したことにはしない。生成clientの13ファイルにサーバー専用の設定名・APIスケジューラ実装の文字列がないこと、生成Worker設定にService Bindingがなく、R2と10分Cronが各1つあることを確認した。
+
+ビルド済みの単一WorkerをMiniflareで起動し、`/today` が200 HTML、`/health` が200 JSON、API各パスが接続設定不足の503 JSON・`no-store` を返すことを確認した。ローカルscheduledの呼出しも200で完了した。DB接続のない環境なので、実ジョブの処理や時刻遵守を証明するものではない。旧Cloudflare Worker/Cronの停止・削除、統合先のSecrets設定、本番公開は今回のブランチ作業では実施していない。切替は `operations.md` の手順に従う。
+
 ## 検証の限界
 
 実HTTP結合試験を追加し、2026-10-11 16:33 JSTに5件すべて成功した。隔離したDocker PostgreSQL 16・GoTrue・PostgRESTへアプリの実マイグレーションを適用し、実パスワードログイン、JWT不正/期限切れ、RLS、関連取得、初期設定、着用再送/洗濯、Auth削除後のJWT拒否と匿名化を確認した。Hono入口もローカルNode HTTPサーバーを通して呼び、Auth/RESTも実HTTPである。Cloudflare実行環境・外部R2・実SMTPの証拠にはしない。再現手順と削除範囲は `tests/integration/README.md`。
