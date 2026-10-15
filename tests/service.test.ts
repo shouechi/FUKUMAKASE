@@ -29,10 +29,7 @@ const week = "2026-10-19",
   now = new Date("2026-10-19T00:00:00Z");
 const env = {
   OPENAI_API_KEY: "test-key",
-  AI_MODEL_OUTFIT: "test-model",
   AI_REQUEST_RESERVE_USD: "0.01",
-  AI_INPUT_USD_PER_MILLION: "0.1",
-  AI_OUTPUT_USD_PER_MILLION: "0.4",
 } as any;
 function setup(clothes: Cloth[], rows: any[] = []) {
   const saved: any[] = [];
@@ -149,6 +146,7 @@ describe("service-level adversarial recommendation verification", () => {
       const plans = await generatePlans(env, s.db as any, userId, week, now, {
         fetcher,
       });
+      expect(fetcher).toHaveBeenCalled();
       const first = plans.find((p) => p.target_date === week)!;
       expect(first.source).toBe("rule");
       expect(
@@ -162,7 +160,13 @@ describe("service-level adversarial recommendation verification", () => {
     const fetcher = vi.fn(
       async () => new Response("unavailable", { status: 503 }),
     );
-    await generatePlans(env, s.db as any, userId, week, now, { fetcher });
+    const plans = await generatePlans(env, s.db as any, userId, week, now, {
+      fetcher,
+    });
+    expect(plans.find((p) => p.target_date === week)).toMatchObject({
+      source: "rule",
+      plan_status: "proposed",
+    });
     const request = fetcher.mock.calls[0] as unknown as [unknown, RequestInit];
     const body = String(request[1].body);
     expect(body).not.toContain(userId);

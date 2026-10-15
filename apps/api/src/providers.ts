@@ -8,6 +8,7 @@ import {
 } from "@outfit/schemas";
 import { addDays, jstDate, seasonalWeather } from "@outfit/domain";
 import { result, type Env } from "./types";
+import { aiConfig } from "./ai-config";
 
 export async function getForecasts(
   env: Env,
@@ -106,7 +107,7 @@ export async function getForecasts(
   });
 }
 
-/** Reservation is atomic in Postgres; unconfigured models/costs fail closed to free rules. */
+/** Reservation is atomic in Postgres; missing credentials/reserve fail closed to free rules. */
 export async function askAI<T>(
   env: Env,
   db: SupabaseClient,
@@ -117,21 +118,8 @@ export async function askAI<T>(
   input: unknown[],
   fetcher: typeof fetch = fetch,
 ): Promise<T | null> {
-  const model =
-    action === "classify" ? env.AI_MODEL_CLASSIFY : env.AI_MODEL_OUTFIT;
-  const reserve = Number(env.AI_REQUEST_RESERVE_USD),
-    inputRate = Number(env.AI_INPUT_USD_PER_MILLION),
-    outputRate = Number(env.AI_OUTPUT_USD_PER_MILLION);
-  if (
-    !env.OPENAI_API_KEY ||
-    !model ||
-    !Number.isFinite(reserve) ||
-    reserve <= 0 ||
-    !Number.isFinite(inputRate) ||
-    inputRate <= 0 ||
-    !Number.isFinite(outputRate) ||
-    outputRate <= 0
-  )
+  const reserve = Number(env.AI_REQUEST_RESERVE_USD);
+  if (!env.OPENAI_API_KEY || !Number.isFinite(reserve) || reserve <= 0)
     return null;
   const usageId = await result<string | null>(
     db.rpc("reserve_ai", {
@@ -152,9 +140,11 @@ export async function askAI<T>(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model,
+        model: aiConfig.model,
+        service_tier: aiConfig.serviceTier,
+        reasoning: { effort: aiConfig.reasoningEffort },
         store: false,
-        max_output_tokens: 700,
+        max_output_tokens: aiConfig.maxOutputTokens,
         input,
         text: {
           format: {
@@ -178,7 +168,10 @@ export async function askAI<T>(
         inTokens >= 0 &&
         outTokens >= 0
       ) {
-        cost = (inTokens * inputRate + outTokens * outputRate) / 1e6;
+        cost =
+          (inTokens * aiConfig.inputUsdPerMillion +
+            outTokens * aiConfig.outputUsdPerMillion) /
+          1e6;
         await result(
           db
             .from("ai_usage")

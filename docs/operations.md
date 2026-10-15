@@ -42,7 +42,11 @@ OpenAI/天気のキーがなくても、ルールベース提案・季節の暫�
 | `SUPABASE_SERVICE_ROLE_KEY` | 統合WorkerのSecret。サーバー専用キー |
 | `APP_ORIGIN` | 統合Workerの実行時設定。本番のオリジン（パスを含めない）：`https://fukumakase.hajimete-1105.workers.dev` |
 
-すべてSecretとして登録しても構いません。CLIを使う場合は対話式の `pnpm --filter @outfit/web exec wrangler secret put SUPABASE_SERVICE_ROLE_KEY --config wrangler.jsonc` 等で設定します。値をコマンド引数やログへ残さないでください。OpenAI/天気のキーとモデル/料金の設定、受付スイッチも統合Workerに置きます。AIを使うには当月の予算有効化が別途必要です。
+すべてSecretとして登録しても構いません。CLIを使う場合は対話式の `pnpm --filter @outfit/web exec wrangler secret put SUPABASE_SERVICE_ROLE_KEY --config wrangler.jsonc` 等で設定します。値をコマンド引数やログへ残さないでください。OpenAI/天気のキー、AI予約額、受付スイッチも統合Workerに置きます。AIを使うには当月の予算有効化が別途必要です。
+
+写真分類とコーデ提案は共通の `apps/api/src/ai-config.ts` により `gpt-6-luna` / Standardに固定しています。入力$0.10・出力$0.50 / 100万トークン（2026-10-15公式確認）、推論なし、出力上限700トークン、`store: false`、厳格なJSON Schemaを使用します。旧 `AI_MODEL_CLASSIFY` / `AI_MODEL_OUTFIT` / `AI_INPUT_USD_PER_MILLION` / `AI_OUTPUT_USD_PER_MILLION` が環境に残っていても参照しません。これらの旧設定を削除しても構いません。モデルや単価の変更は共通設定のコード変更として検証します。
+
+有料AI用に設定するのは `OPENAI_API_KEY` と正の `AI_REQUEST_RESERVE_USD` です。後者は1リクエスト分のUSD予約額で、既定値はありません。写真のサイズ・出力などを実測し、余裕を持った額を設定してください。両方の開発用設定例は同じAPI実装を使い、空欄のままなら有料APIを呼び出しません。DB予算も別途必要なので、これらの値だけでAIは有効になりません。
 
 手動公開はリポジトリのルートから次の1コマンドでビルド・公開します。
 
@@ -87,7 +91,7 @@ Supabaseではメール確認、以下のパスワード要件、Google OAuth、
 
 - `UPLOADS_ENABLED=false` は新規画像追加を停止します。既存画像閲覧や洗濯操作は維持します。
 - `SIGNUPS_ENABLED=false` は新しいアプリ利用者の受付を停止します。認証メール送信の停止にはSupabase Auth側でも新規登録を無効化します。
-- `service_budget` の当月行が未設定、または `ai_enabled=false` の場合、AI呼出しは行いません。管理者がSQLで当月の予算を明示設定し、モデル名と単価をSecretsに設定してから有効化します。費用の見積りは即時請求額の保証ではありません。
+- `service_budget` の日本時間当月行が未設定、または `ai_enabled=false` の場合、AI呼出しは行いません。管理者がSQLで当月の予算を明示設定し、APIキーと正のリクエスト予約額を設定してから有効化します。費用は応答の入力・出力トークンと共通のStandard単価による概算です。キャッシュ読込割引・書込料金・長文料金などの個別補正は行わず、即時請求額の保証ではないため、公式料金・請求と突き合わせます。
 - 予算は予約と精算を分離します。障害で不明な予約を返金して再実行すると過剰利用になるため、AIプロバイダの請求状態を確認してから運用者が処置します。
 - Cronは10分間隔。ジョブはリース・期限・再試行回数を持ち、失敗はバックオフします。`generation_jobs` の最古のpending、failed、長いleaseと処理件数を監視します。利用者数が増えたら実測からバッチ容量を見直します。
 - 天気は取得成功分のキャッシュ、古すぎる場合は季節の暫定値。3日予報契約では4日目以降は暫定表示です。手動固定日は更新せず、必要な警告だけを変えます。
