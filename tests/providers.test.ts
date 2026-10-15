@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   askAI,
   getForecasts,
+  aiOutfitSchema,
   classificationSchema,
 } from "../apps/api/src/providers";
 import { deleteAccount, sweepOrphanImages } from "../apps/api/src/scheduler";
@@ -11,33 +12,228 @@ const now = new Date("2026-10-13T01:00:00Z");
 const userId = "11111111-1111-4111-8111-111111111111";
 const env = {
   OPENAI_API_KEY: "test-secret",
-  AI_MODEL_CLASSIFY: "configured-model",
-  AI_MODEL_OUTFIT: "configured-model",
   AI_REQUEST_RESERVE_USD: "0.01",
-  AI_INPUT_USD_PER_MILLION: "0.1",
-  AI_OUTPUT_USD_PER_MILLION: "0.4",
   WEATHER_API_KEY: "weather-secret",
 } as any;
 
+describe("fixed GPT-6 Luna request and billing contract (OpenAI simulated)", () => {
+  const classified = {
+    category: "top",
+    subtype: "shirt",
+    color: "white",
+    seasons: ["autumn"],
+    confidence: 0.9,
+    review_required: false,
+  };
+  const outfit = {
+    items: [{ clothes_id: userId, slot: "top" }],
+    reason_short: "色を合わせました",
+  };
+  const providerResponse = (value: unknown, usage?: unknown) =>
+    Response.json({
+      id: "response-test",
+      status: "completed",
+      usage,
+      output: [
+        { content: [{ type: "output_text", text: JSON.stringify(value) }] },
+      ],
+    });
+
+  test.each(["classify", "daily", "weekly", "scheduled"])(
+    "%s uses the fixed model and explicit inexpensive settings despite legacy overrides",
+    async (action) => {
+      const db = fakeDatabase(
+        () => [],
+        (name) => (name === "reserve_ai" ? "usage-id" : null),
+      );
+      const classification = action === "classify";
+      const expected = classification ? classified : outfit;
+      const input = [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "test metadata" }],
+        },
+      ];
+      const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+        // No paid request may start before its atomic database reservation succeeds.
+        expect(db.rpc).toHaveBeenCalledExactlyOnceWith("reserve_ai", {
+          p_user_id: userId,
+          p_action: action,
+          p_estimate: 0.01,
+          p_request_key: "request",
+        });
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          model: "gpt-6-luna",
+          reasoning: { effort: "none" },
+          service_tier: "default",
+          max_output_tokens: 700,
+          store: false,
+          input,
+          text: {
+            format: {
+              type: "json_schema",
+              name: classification ? "clothing_classification" : "outfit",
+              strict: true,
+              schema: expect.any(Object),
+            },
+          },
+        });
+        return providerResponse(expected);
+      });
+      expect(
+        await askAI(
+          {
+            ...env,
+            AI_MODEL_CLASSIFY: "expensive-classifier",
+            AI_MODEL_OUTFIT: "expensive-outfit-model",
+          },
+          db as any,
+          userId,
+          action,
+          "request",
+          (classification ? classificationSchema : aiOutfitSchema) as any,
+          input,
+          fetcher,
+        ),
+      ).toEqual(expected);
+      expect(fetcher).toHaveBeenCalledExactlyOnceWith(
+        "https://api.openai.com/v1/responses",
+        expect.objectContaining({ method: "POST" }),
+      );
+      expect(db.rpc).toHaveBeenLastCalledWith("settle_ai", {
+        p_usage_id: "usage-id",
+        p_actual: 0.01,
+        p_success: true,
+      });
+    },
+  );
+
+  test.each([false, true])(
+    "successful usage is billed at fixed standard rates; legacy override present: %s",
+    async (legacy) => {
+      const db = fakeDatabase(
+        () => [],
+        (name) => (name === "reserve_ai" ? "usage-id" : null),
+      );
+      const fetcher = vi.fn(async () =>
+        providerResponse(classified, {
+          input_tokens: 1000,
+          output_tokens: 200,
+        }),
+      );
+      expect(
+        await askAI(
+          {
+            ...env,
+            ...(legacy
+              ? {
+                  AI_INPUT_USD_PER_MILLION: "100",
+                  AI_OUTPUT_USD_PER_MILLION: "500",
+                }
+              : {}),
+          },
+          db as any,
+          userId,
+          "classify",
+          "request",
+          classificationSchema,
+          [],
+          fetcher,
+        ),
+      ).toEqual(classified);
+      expect(db.rpc).toHaveBeenLastCalledWith("settle_ai", {
+        p_usage_id: "usage-id",
+        p_actual: 0.0002,
+        p_success: true,
+      });
+      expect(db.queries).toContainEqual(
+        expect.objectContaining({
+          table: "ai_usage",
+          action: "update",
+          payload: {
+            input_tokens: 1000,
+            output_tokens: 200,
+            provider_request_id: "response-test",
+          },
+          filters: [
+            ["eq", "id", "usage-id"],
+            ["eq", "user_id", userId],
+          ],
+        }),
+      );
+    },
+  );
+
+  test.each([
+    { input_tokens: -1, output_tokens: 200 },
+    { input_tokens: 1.5, output_tokens: 200 },
+    { input_tokens: 1000, output_tokens: -1 },
+    { input_tokens: "invalid", output_tokens: 200 },
+    { input_tokens: Number.MAX_SAFE_INTEGER + 1, output_tokens: 200 },
+  ])(
+    "unusable usage preserves the conservative reservation: %j",
+    async (usage) => {
+      const db = fakeDatabase(
+        () => [],
+        (name) => (name === "reserve_ai" ? "usage-id" : null),
+      );
+      const fetcher = vi.fn(async () => providerResponse(classified, usage));
+      expect(
+        await askAI(
+          env,
+          db as any,
+          userId,
+          "classify",
+          "request",
+          classificationSchema,
+          [],
+          fetcher,
+        ),
+      ).toEqual(classified);
+      expect(db.rpc).toHaveBeenLastCalledWith("settle_ai", {
+        p_usage_id: "usage-id",
+        p_actual: 0.01,
+        p_success: true,
+      });
+      expect(db.queries).toHaveLength(0);
+    },
+  );
+});
+
 describe("provider failures and budget fallback", () => {
-  test("missing model/cost configuration and exhausted global budget never call AI", async () => {
+  test.each([
+    { OPENAI_API_KEY: undefined },
+    { OPENAI_API_KEY: "" },
+    ...[undefined, "", "0", "-1", "NaN", "Infinity"].map((reserve) => ({
+      AI_REQUEST_RESERVE_USD: reserve,
+    })),
+  ])(
+    "missing credentials or invalid reservation fails closed: %j",
+    async (override) => {
+      const fetcher = vi.fn();
+      const db = fakeDatabase();
+      expect(
+        await askAI(
+          { ...env, ...override },
+          db as any,
+          userId,
+          "classify",
+          "request",
+          classificationSchema,
+          [],
+          fetcher,
+        ),
+      ).toBeNull();
+      expect(db.rpc).not.toHaveBeenCalled();
+      expect(fetcher).not.toHaveBeenCalled();
+    },
+  );
+  test("exhausted global budget never calls AI or settles an unreserved request", async () => {
     const fetcher = vi.fn();
     const db = fakeDatabase(
       () => [],
       () => null,
     );
-    expect(
-      await askAI(
-        { ...env, AI_MODEL_CLASSIFY: undefined },
-        db as any,
-        userId,
-        "classify",
-        "request",
-        classificationSchema,
-        [],
-        fetcher,
-      ),
-    ).toBeNull();
     expect(
       await askAI(
         env,
@@ -50,9 +246,15 @@ describe("provider failures and budget fallback", () => {
         fetcher,
       ),
     ).toBeNull();
+    expect(db.rpc).toHaveBeenCalledExactlyOnceWith("reserve_ai", {
+      p_user_id: userId,
+      p_action: "classify",
+      p_estimate: 0.01,
+      p_request_key: "request",
+    });
     expect(fetcher).not.toHaveBeenCalled();
   });
-  test.each(["http", "timeout", "malformed", "bad-category"])(
+  test.each(["http", "timeout", "malformed", "bad-category", "incomplete"])(
     "AI %s returns fallback and settles its reserved budget",
     async (failure) => {
       const db = fakeDatabase(
@@ -65,7 +267,7 @@ describe("provider failures and budget fallback", () => {
         if (failure === "http")
           return new Response("provider error", { status: 503 });
         return Response.json({
-          status: "completed",
+          status: failure === "incomplete" ? "incomplete" : "completed",
           output: [
             {
               content: [
@@ -75,7 +277,8 @@ describe("provider failures and budget fallback", () => {
                     failure === "malformed"
                       ? "not json"
                       : JSON.stringify({
-                          category: "arbitrary",
+                          category:
+                            failure === "bad-category" ? "arbitrary" : "top",
                           color: "white",
                           subtype: "shirt",
                           seasons: ["autumn"],
@@ -100,6 +303,7 @@ describe("provider failures and budget fallback", () => {
           fetcher,
         ),
       ).toBeNull();
+      expect(fetcher).toHaveBeenCalledTimes(1);
       expect(db.rpc).toHaveBeenCalledWith("settle_ai", {
         p_usage_id: "usage-id",
         p_actual: 0.01,

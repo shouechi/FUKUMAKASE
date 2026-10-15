@@ -20,6 +20,8 @@ pnpm dev
 
 ローカル開発ではWebは `http://127.0.0.1:3000`、Hono APIは `http://127.0.0.1:8787` の2サーバーを使います。Webの `/api` は開発プロキシ経由でAPIへ接続します。R2はWranglerのローカルストレージです。本番は同じAPI実装をWorker内で直接呼び出すため、API用WorkerやService Bindingは不要です。詳しい設定・公開手順は [運用手順](docs/operations.md) を参照してください。
 
+写真分類とコーデ提案のAIは `gpt-6-luna` に固定し、モデル・単価・呼び出し設定を `apps/api/src/ai-config.ts` で共有します。有料AIを使うにはサーバー側の `OPENAI_API_KEY`、正の `AI_REQUEST_RESERVE_USD`、DBの当月予算有効化が必要です。未設定時は写真の手動分類・ルールベース提案を利用できます。環境変数によるモデルや単価の指定は不要です。
+
 ## 本番への公開
 
 非公開R2とSupabaseを準備し、Worker `fukumakase` にサーバー用のSecretsを設定してから公開します。

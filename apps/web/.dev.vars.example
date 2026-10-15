@@ -11,15 +11,14 @@ APP_ORIGIN="http://localhost:8787"
 SIGNUPS_ENABLED="true"
 UPLOADS_ENABLED="true"
 
-# Unset credentials/models/prices use deterministic rules without paid AI.
+# Both AI tasks share the fixed gpt-6-luna settings in apps/api/src/ai-config.ts.
+# Model/prices cannot be overridden by environment variables.
+# Missing credentials/reservation use deterministic rules without paid AI.
 # Enable only after inserting an ai_enabled service_budget row for the JST month.
-# Prices are USD per 1 million tokens; verify prices and reserve conservatively.
+# Set a positive USD reservation above measured request cost; no default is used.
+# This is the same API implementation/configuration as apps/api/.dev.vars.example.
 OPENAI_API_KEY=""
-AI_MODEL_CLASSIFY=""
-AI_MODEL_OUTFIT=""
 AI_REQUEST_RESERVE_USD=""
-AI_INPUT_USD_PER_MILLION=""
-AI_OUTPUT_USD_PER_MILLION=""
 
 WEATHER_API_KEY=""
 WEATHER_FORECAST_DAYS="3"

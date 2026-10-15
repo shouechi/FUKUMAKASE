@@ -9,16 +9,14 @@ APP_ORIGIN="http://localhost:3000"
 SIGNUPS_ENABLED="true"
 UPLOADS_ENABLED="true"
 
-# Unset credentials/models/prices disable paid AI and use deterministic rules.
+# Both AI tasks share the fixed gpt-6-luna settings in src/ai-config.ts.
+# Model/prices cannot be overridden by environment variables.
+# Missing credentials/reservation disable paid AI and use deterministic rules.
 # Enable only after inserting an ai_enabled service_budget row for the JST month.
-# Verify the selected model's current official prices and set a conservative
-# reservation above expected request cost. These are USD per 1 million tokens.
+# Set a positive USD reservation above measured request cost; no default is used.
+# These server settings also apply to the combined Worker example in apps/web.
 OPENAI_API_KEY=""
-AI_MODEL_CLASSIFY=""
-AI_MODEL_OUTFIT=""
 AI_REQUEST_RESERVE_USD=""
-AI_INPUT_USD_PER_MILLION=""
-AI_OUTPUT_USD_PER_MILLION=""
 
 # Optional: 3-day service by default; set 7 only for a plan covering 7 days.
 # Dates beyond the purchased horizon use explicitly marked seasonal estimates.

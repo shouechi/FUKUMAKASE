@@ -6,11 +6,7 @@ export interface Env {
   CLOTHES_BUCKET: R2Bucket;
   APP_ORIGIN?: string;
   OPENAI_API_KEY?: string;
-  AI_MODEL_CLASSIFY?: string;
-  AI_MODEL_OUTFIT?: string;
   AI_REQUEST_RESERVE_USD?: string;
-  AI_INPUT_USD_PER_MILLION?: string;
-  AI_OUTPUT_USD_PER_MILLION?: string;
   WEATHER_API_KEY?: string;
   WEATHER_FORECAST_DAYS?: string;
   UPLOADS_ENABLED?: string;
