@@ -237,6 +237,8 @@ export async function generatePlans(
       const candidates = context.clothes.filter((c) =>
         validateOutfit([{ clothes_id: c.id, slot: c.category }], ctx),
       );
+      const candidateIds = new Set(candidates.map((c) => c.id));
+      const candidateStyles = new Set(candidates.map((c) => c.subtype));
       const ai = await askAI(
         env,
         db,
@@ -252,7 +254,7 @@ export async function generatePlans(
                 type: "input_text",
                 text: JSON.stringify({
                   instruction:
-                    "選択可能な服だけから仕事用の1コーデを選ぶ。topとbottom必須、必要な場合outerwearとshoes。日本語の短い理由を1行。",
+                    "選択可能な服だけから仕事用の1コーデを選ぶ。topとbottom必須、必要な場合outerwearとshoes。最近着た服と直前の予定の繰り返しをできる範囲で避け、週内の予定着用回数と実績から学習した好みも考慮する。服が少なければ重複を許容する。予定を着用実績とみなさない。日本語の短い理由を1行。",
                   candidates: candidates.map(
                     ({ id, category, subtype, color, seasons, thickness }) => ({
                       id,
@@ -265,6 +267,28 @@ export async function generatePlans(
                   ),
                   preferences: {
                     style_keywords: context.preferences.style_keywords,
+                    learned_styles: Object.fromEntries(
+                      Object.entries(ctx.learnedStyles ?? {}).filter(
+                        ([style]) => candidateStyles.has(style),
+                      ),
+                    ),
+                  },
+                  wear_history: {
+                    recent_clothes_ids: [
+                      ...new Set(
+                        (ctx.recentIds ?? []).filter((id) =>
+                          candidateIds.has(id),
+                        ),
+                      ),
+                    ],
+                  },
+                  planned_usage: {
+                    projected_wears: Object.fromEntries(
+                      [...projected].filter(([id]) => candidateIds.has(id)),
+                    ),
+                    previous_items: (ctx.previousItems ?? [])
+                      .filter(({ clothes_id }) => candidateIds.has(clothes_id))
+                      .map(({ clothes_id, slot }) => ({ clothes_id, slot })),
                   },
                   forecast: plan.weather,
                   occasion: ctx.occasion,
