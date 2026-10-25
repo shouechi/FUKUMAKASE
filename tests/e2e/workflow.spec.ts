@@ -4,6 +4,7 @@ import {
   type Cloth,
   type Plan,
   type UploadGrant,
+  type ClothesDeletionReceipt,
 } from "../../packages/schemas/src/index";
 import { jstDate, weekStart } from "../../packages/domain/src/index";
 
@@ -59,6 +60,7 @@ async function fixture(
   );
   const today = jstDate(),
     clothes = structuredClone([top, bottom]);
+  const deletions: (ClothesDeletionReceipt & { cloth: Cloth })[] = [];
   const mutations: {
     method: string;
     path: string;
@@ -173,7 +175,15 @@ async function fixture(
               },
             }
           : { target_date: today, ...req.postDataJSON() };
-    else if (path === "/api/clothes/upload-url") data = uploadGrant;
+    else if (path === "/api/clothes/deletions") {
+      const server_now = new Date().toISOString();
+      data = {
+        items: deletions
+          .filter((r) => Date.parse(r.undo_until) > Date.now())
+          .map(({ cloth, ...receipt }) => ({ ...receipt, server_now })),
+        server_now,
+      };
+    } else if (path === "/api/clothes/upload-url") data = uploadGrant;
     else if (path.startsWith("/api/uploads/"))
       data = { ok: true, upload_id: path.split("/").at(-1) };
     else if (path === "/api/clothes") {
@@ -219,14 +229,330 @@ async function fixture(
       c.wears_since_wash = 0;
       c.state = "available";
       data = c;
+    } else if (path.endsWith("/restore")) {
+      const receipt = deletions.find(
+        (r) =>
+          path.includes(r.clothes_id) &&
+          r.deletion_token === req.postDataJSON().deletion_token,
+      );
+      if (!receipt || Date.parse(receipt.undo_until) <= Date.now())
+        return route.fulfill({
+          status: 409,
+          json: {
+            error: {
+              code: "UNDO_EXPIRED",
+              message: "取り消せる時間を過ぎました",
+              request_id: crypto.randomUUID(),
+            },
+          },
+        });
+      data = receipt.cloth;
+      clothes.push(data);
+      deletions.splice(deletions.indexOf(receipt), 1);
     } else if (path.startsWith("/api/clothes/")) {
       data = clothes.find((c) => path.includes(c.id));
       if (method === "PATCH") Object.assign(data, req.postDataJSON());
+      if (method === "DELETE") {
+        const server_now = new Date().toISOString();
+        const receipt = {
+          ok: true as const,
+          category: data.category,
+          color: data.color,
+          clothes_id: data.id,
+          deletion_token: crypto.randomUUID(),
+          server_now,
+          undo_until: new Date(Date.now() + 30_000).toISOString(),
+        };
+        deletions.push({ ...receipt, cloth: structuredClone(data) });
+        clothes.splice(clothes.indexOf(data), 1);
+        data = receipt;
+      }
     } else if (path.startsWith("/api/plans/")) data = plan;
     return route.fulfill({ json: data });
   });
-  return { mutations, clothes, plan, today, png };
+  return { mutations, clothes, plan, today, png, deletions };
 }
+
+async function deleteTop(page: Page) {
+  await page.goto(`/closet/${top.id}`);
+  await page.getByRole("button", { name: "この服を削除", exact: true }).click();
+  await expect(
+    page.getByText("この服を削除しますか？", { exact: false }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "削除する", exact: true }).click();
+  await expect(page).toHaveURL(/\/closet$/);
+}
+
+test("deletion Undo survives reload and restores the original laundry state", async ({
+  page,
+}) => {
+  const s = await fixture(page);
+  s.clothes[0].state = "laundry";
+  s.clothes[0].wears_since_wash = 1;
+  await deleteTop(page);
+  await expect(
+    page.getByRole("button", { name: "削除を取り消す", exact: true }),
+  ).toBeEnabled();
+  expect(s.clothes.map((c) => c.id)).not.toContain(top.id);
+  await page.reload();
+  await page
+    .getByRole("button", { name: "削除を取り消す", exact: true })
+    .click();
+  await expect(
+    page.getByText("削除を取り消しました", { exact: true }),
+  ).toBeVisible();
+  expect(s.clothes.find((c) => c.id === top.id)).toMatchObject({
+    state: "laundry",
+    wears_since_wash: 1,
+  });
+  const restores = s.mutations.filter((m) => m.path.endsWith("/restore"));
+  expect(restores).toHaveLength(1);
+  expect(restores[0].body).toEqual({ deletion_token: expect.any(String) });
+  await page.goto(`/closet/${top.id}`);
+  await expect(page.getByText("洗濯待ち", { exact: true })).toBeVisible();
+  expect(s.mutations.some((m) => m.path.endsWith("/washed"))).toBe(false);
+});
+
+test("lost deletion response recovers server receipt and offers Undo", async ({
+  page,
+}) => {
+  const s = await fixture(page);
+  const deleteKeys: string[] = [];
+  await page.route(`**/api/clothes/${top.id}`, async (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    deleteKeys.push(route.request().headers()["idempotency-key"]);
+    if (deleteKeys.length > 1) return route.fallback();
+    const cloth = s.clothes.splice(0, 1)[0];
+    const server_now = new Date().toISOString();
+    s.deletions.push({
+      ok: true,
+      category: cloth.category,
+      color: cloth.color,
+      clothes_id: cloth.id,
+      cloth,
+      deletion_token: crypto.randomUUID(),
+      server_now,
+      undo_until: new Date(Date.now() + 30_000).toISOString(),
+    });
+    return route.abort("failed");
+  });
+  await deleteTop(page);
+  await expect(
+    page.getByRole("button", { name: "削除を取り消す", exact: true }),
+  ).toBeEnabled();
+  await page
+    .getByRole("button", { name: "削除を取り消す", exact: true })
+    .click();
+  await expect(
+    page.getByText("削除を取り消しました", { exact: true }),
+  ).toBeVisible();
+  await deleteTop(page);
+  expect(deleteKeys).toHaveLength(2);
+  expect(deleteKeys[1]).not.toBe(deleteKeys[0]);
+  expect(s.clothes.map((c) => c.id)).not.toContain(top.id);
+});
+
+test("successful restoration with an unreadable response survives receipt refresh and confirms after the Undo deadline", async ({
+  page,
+}) => {
+  const s = await fixture(page);
+  await page.clock.install();
+  const keys: string[] = [];
+  let restored: Cloth;
+  await page.route(`**/api/clothes/${top.id}/restore`, (route) => {
+    keys.push(route.request().headers()["idempotency-key"]);
+    if (keys.length === 1) {
+      restored = s.deletions.splice(0, 1)[0].cloth;
+      s.clothes.push(restored);
+      return route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: "<!DOCTYPE html><html></html>",
+      });
+    }
+    return route.fulfill({ json: restored });
+  });
+  await deleteTop(page);
+  await page
+    .getByRole("button", { name: "削除を取り消す", exact: true })
+    .click();
+  const confirmation = page.getByRole("button", {
+    name: "取り消し結果を確認",
+    exact: true,
+  });
+  await expect(confirmation).toBeEnabled();
+  const manualRefresh = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/clothes/deletions",
+  );
+  await page
+    .getByRole("button", { name: "削除状態を再確認", exact: true })
+    .click();
+  expect((await (await manualRefresh).json()).items).toEqual([]);
+  await expect(confirmation).toBeEnabled();
+  const visibilityRefresh = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/clothes/deletions",
+  );
+  await page.evaluate(() =>
+    document.dispatchEvent(new Event("visibilitychange")),
+  );
+  expect((await (await visibilityRefresh).json()).items).toEqual([]);
+  await expect(confirmation).toBeEnabled();
+  await page.clock.fastForward(31_000);
+  await expect(confirmation).toBeEnabled();
+  await confirmation.click();
+  await expect(
+    page.getByText("削除を取り消しました", { exact: true }),
+  ).toBeVisible();
+  expect(keys).toHaveLength(2);
+  expect(keys[1]).toBe(keys[0]);
+  expect(s.clothes.filter((c) => c.id === top.id)).toHaveLength(1);
+});
+
+test("manual closet navigation recovers deletion after its response and detail recovery both fail without reusing the old key", async ({
+  page,
+}) => {
+  const s = await fixture(page);
+  const deleteKeys: string[] = [];
+  let failedRecovery = false;
+  await page.route("**/api/clothes/deletions", (route) => {
+    if (deleteKeys.length === 1 && !failedRecovery) {
+      failedRecovery = true;
+      return route.abort("failed");
+    }
+    return route.fallback();
+  });
+  await page.route(`**/api/clothes/${top.id}`, (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    deleteKeys.push(route.request().headers()["idempotency-key"]);
+    if (deleteKeys.length > 1) return route.fallback();
+    const cloth = s.clothes.splice(0, 1)[0],
+      server_now = new Date().toISOString();
+    s.deletions.push({
+      ok: true,
+      category: cloth.category,
+      color: cloth.color,
+      clothes_id: cloth.id,
+      cloth,
+      deletion_token: crypto.randomUUID(),
+      server_now,
+      undo_until: new Date(Date.now() + 30_000).toISOString(),
+    });
+    return route.abort("failed");
+  });
+  await page.goto(`/closet/${top.id}`);
+  await page.getByRole("button", { name: "この服を削除", exact: true }).click();
+  await page.getByRole("button", { name: "削除する", exact: true }).click();
+  await expect(page.getByRole("alert")).toBeVisible();
+  expect(failedRecovery).toBe(true);
+  await page.getByRole("link", { name: "クローゼット", exact: true }).click();
+  await page
+    .getByRole("button", { name: "削除を取り消す", exact: true })
+    .click();
+  await expect(
+    page.getByText("削除を取り消しました", { exact: true }),
+  ).toBeVisible();
+  await deleteTop(page);
+  expect(deleteKeys).toHaveLength(2);
+  expect(deleteKeys[0]).toBeTruthy();
+  expect(deleteKeys[1]).not.toBe(deleteKeys[0]);
+});
+
+test("failed restoration keeps Undo retryable and reuses its operation key", async ({
+  page,
+}) => {
+  const s = await fixture(page);
+  const operationKeys: string[] = [];
+  await page.route(`**/api/clothes/${top.id}/restore`, (route) => {
+    operationKeys.push(route.request().headers()["idempotency-key"]);
+    if (operationKeys.length === 1) return route.abort("failed");
+    return route.fallback();
+  });
+  await deleteTop(page);
+  await page
+    .getByRole("button", { name: "削除を取り消す", exact: true })
+    .click();
+  await expect(
+    page.getByText("取り消し結果を確認できませんでした。", { exact: false }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "取り消し結果を確認", exact: true })
+    .click();
+  await expect(
+    page.getByText("削除を取り消しました", { exact: true }),
+  ).toBeVisible();
+  expect(operationKeys).toHaveLength(2);
+  expect(operationKeys[0]).toBeTruthy();
+  expect(operationKeys[1]).toBe(operationKeys[0]);
+  expect(s.clothes.filter((c) => c.id === top.id)).toHaveLength(1);
+});
+
+test("Undo countdown uses server duration even when the device clock is wrong", async ({
+  page,
+}) => {
+  const s = await fixture(page);
+  const server_now = "2026-01-01T00:00:00Z";
+  await page.route("**/api/clothes/deletions", (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            ok: true,
+            category: "top",
+            color: "白",
+            clothes_id: top.id,
+            deletion_token: "99999999-9999-4999-8999-999999999999",
+            server_now,
+            undo_until: "2026-01-01T00:00:01Z",
+          },
+        ],
+        server_now,
+      },
+    }),
+  );
+  await page.goto("/closet");
+  const undo = page.getByRole("button", {
+    name: "削除を取り消す",
+    exact: true,
+  });
+  await expect(undo).toBeEnabled();
+  await expect(undo).toBeDisabled();
+  await expect(
+    page.getByText("削除を取り消せる時間を過ぎました。", { exact: true }),
+  ).toBeVisible();
+  expect(s.mutations.filter((m) => m.path.endsWith("/restore"))).toEqual([]);
+});
+
+test("capacity failure explains the limit and leaves Undo available for another attempt", async ({
+  page,
+}) => {
+  await fixture(page);
+  let attempts = 0;
+  await page.route(`**/api/clothes/${top.id}/restore`, (route) => {
+    if (++attempts > 1) return route.fallback();
+    return route.fulfill({
+      status: 429,
+      json: {
+        error: {
+          code: "CLOTHES_LIMIT",
+          message: "登録上限に達しています。別の服を削除すると取り消せます",
+          request_id: crypto.randomUUID(),
+        },
+      },
+    });
+  });
+  await deleteTop(page);
+  const undo = page.getByRole("button", {
+    name: "削除を取り消す",
+    exact: true,
+  });
+  await undo.click();
+  await expect(page.getByRole("alert")).toContainText("登録上限");
+  await expect(undo).toBeEnabled();
+  await undo.click();
+  await expect(
+    page.getByText("削除を取り消しました", { exact: true }),
+  ).toBeVisible();
+});
 
 test("today → confirm → reload → history → wash workflow", async ({
   page,

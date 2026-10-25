@@ -1,5 +1,5 @@
 import {execFileSync,spawnSync} from 'node:child_process';
-import {readFileSync} from 'node:fs';
+import {readFileSync,readdirSync} from 'node:fs';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -19,9 +19,11 @@ try{
     await new Promise(resolve=>setTimeout(resolve,1000));
   }
   if(!ready)throw new Error('Local GoTrue did not become healthy in 60 seconds');
-  docker(['exec','-T','db','psql','-U','postgres','-d','outfit','-v','ON_ERROR_STOP=1'],{
-    input:readFileSync(resolve(root,'supabase/migrations/202610110001_initial.sql')),stdio:['pipe','inherit','inherit'],
-  });
+  for(const migration of readdirSync(resolve(root,'supabase/migrations')).filter(name=>name.endsWith('.sql')).sort()){
+    docker(['exec','-T','db','psql','-U','postgres','-d','outfit','-v','ON_ERROR_STOP=1'],{
+      input:readFileSync(resolve(root,'supabase/migrations',migration)),stdio:['pipe','inherit','inherit'],
+    });
+  }
   docker(['up','-d','rest']);
   ready=false;
   for(let attempt=0;attempt<30;attempt++){

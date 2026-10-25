@@ -16,10 +16,13 @@ Honoアプリの入口をNodeのローカルHTTPサーバーへ接続し、テ�
 - 実JWT claimsからのRLS所有権判定、他人データとservice-only RPC/保守表への拒否。
 - 初回設定完了だけのPATCH、日別予定の日本語入力と応答構造。
 - 手動コーデの関連テーブル取得、着用確定の再送、着用数と洗濯処理。
+- 服の削除・30秒のUndo受付の再取得、本人以外と直接RPCの拒否、洗濯状態を維持した復元、再削除後の古い世代の拒否。
 - 退会中の有効JWT拒否、Auth削除後の未失効JWT拒否、削除receiptの匿名化。
 
-通常の `pnpm test` はこの5件をスキップする。上記runnerで別途実行した結果だけを結合試験の成功として数える。
+通常の `pnpm test` はこの6件をスキップする。上記runnerで別途実行した結果だけを結合試験の成功として数える。runnerは`supabase/migrations/`のSQLをファイル名順にすべて適用し、追加マイグレーションも実RESTのスキーマへ反映する。
 
 2026-10-11 16:33 JST: API入口もHTTP化した最終実行で5件すべて成功。対象の3コンテナ・専用network・一時DBの削除を確認した。メールは自動確認設定なので、メール確認・SMTP配信の成功とは扱わない。
+
+2026-10-21: Undo結合ケースを含む6件すべて成功の検証担当報告を受けた。DB・JWT・RPC・RLSは実ローカルサービスを使用し、画像本体・クラウドR2の保持や削除を検証した結果ではない。
 
 バージョンと最小構成は [Supabase公式Docker構成](https://github.com/supabase/supabase/blob/master/docker/docker-compose.yml)、Auth環境変数と自動migrationは [GoTrue公式README](https://github.com/supabase/auth/blob/master/README.md) を参照した。

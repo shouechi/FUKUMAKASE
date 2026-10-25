@@ -97,7 +97,7 @@ export async function sweepOrphanImages(
         .from("clothes")
         .select("image_key")
         .eq("user_id", owner)
-        .is("deleted_at", null)
+        .or("deleted_at.is.null,image_purge_started_at.is.null")
         .in("image_key", keys),
     );
     const grants = await result<any[]>(
@@ -323,11 +323,19 @@ async function processLeasedJob(
         await enqueueReevaluation(db, job.user_id, today);
       }
     } else if (job.job_type === "image_delete") {
-      if (!String(job.payload.image_key).startsWith(`private/${job.user_id}/`))
-        throw new Error("INVALID_IMAGE_OWNER");
-      await env.CLOTHES_BUCKET.delete(job.payload.image_key);
-      if (await env.CLOTHES_BUCKET.head(job.payload.image_key))
-        throw new Error("IMAGE_DELETE_FAILED");
+      const claim = await result<{ image_key: string } | null>(
+        db.rpc("claim_clothes_image_purge", {
+          p_job_id: job.id,
+          p_lease_token: job.lease_token,
+        }),
+      );
+      if (claim) {
+        if (!claim.image_key.startsWith(`private/${job.user_id}/`))
+          throw new Error("INVALID_IMAGE_OWNER");
+        await env.CLOTHES_BUCKET.delete(claim.image_key);
+        if (await env.CLOTHES_BUCKET.head(claim.image_key))
+          throw new Error("IMAGE_DELETE_FAILED");
+      }
     } else if (["daily", "weekly", "reevaluate"].includes(job.job_type)) {
       await generatePlans(
         env,

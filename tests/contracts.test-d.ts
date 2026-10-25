@@ -18,6 +18,17 @@ function sharedClientContract() {
     params: { id: "id" },
     body: { is_available: false },
   });
+  api("POST /api/clothes/:id/restore", {
+    params: { id: "id" },
+    body: { deletion_token: "token" },
+  });
+  // @ts-expect-error restoring requires the deletion generation token
+  api("POST /api/clothes/:id/restore", { params: { id: "id" }, body: {} });
+  api("POST /api/clothes/:id/restore", {
+    params: { id: "id" },
+    // @ts-expect-error callers cannot forge restore ownership
+    body: { deletion_token: "token", user_id: "other" },
+  });
   // @ts-expect-error callers cannot invent response types
   api<{ arbitrary: string }>("GET /api/me/usage");
   // @ts-expect-error missing dynamic path parameter

@@ -6,6 +6,7 @@ import {
   classificationSchema,
   clothesCreateSchema,
   clothesPatchSchema,
+  clothesRestoreSchema,
   dateSchema,
   defaultPreferences,
   manualPlanSchema,
@@ -98,6 +99,18 @@ describe("untrusted API boundaries derived from requirements", () => {
       }).success,
     ).toBe(false);
   });
+  test("restore requires a deletion generation and cannot smuggle ownership or state", () => {
+    expect(
+      clothesRestoreSchema.safeParse({ deletion_token: top }).success,
+    ).toBe(true);
+    for (const payload of [
+      {},
+      { deletion_token: "old" },
+      { deletion_token: top, user_id: bottom },
+      { deletion_token: top, deleted_at: null },
+    ])
+      expect(clothesRestoreSchema.safeParse(payload).success).toBe(false);
+  });
   test("AI classification rejects unsupported categories and arbitrary persisted properties", () => {
     const classification = {
       category: "top",
@@ -179,6 +192,15 @@ describe("shared API response contracts", () => {
     outfit_id: bottom,
     confirmed_at: timestamp,
   };
+  const deletion = {
+    ok: true,
+    category: "top",
+    color: "white",
+    clothes_id: top,
+    deletion_token: bottom,
+    server_now: timestamp,
+    undo_until: "2026-10-13T00:00:30Z",
+  };
   const fixtures = {
     "GET /api/me/preferences": {
       ...defaultPreferences,
@@ -205,7 +227,9 @@ describe("shared API response contracts", () => {
     "GET /api/clothes": { items: [cloth], total: 1, page: 1, limit: 100 },
     "GET /api/clothes/:id": cloth,
     "PATCH /api/clothes/:id": cloth,
-    "DELETE /api/clothes/:id": { ok: true },
+    "DELETE /api/clothes/:id": deletion,
+    "POST /api/clothes/:id/restore": cloth,
+    "GET /api/clothes/deletions": { items: [deletion], server_now: timestamp },
     "POST /api/clothes/:id/washed": cloth,
     "GET /api/outfits/today": plan,
     "POST /api/outfits/today/regenerate": {

@@ -19,8 +19,14 @@ import {
   type Category,
   type Cloth,
   type Season,
+  type ClothesDeletionReceipt,
 } from "@outfit/schemas";
-import { api, compressImage } from "../lib/client";
+import {
+  api,
+  ApiError,
+  acknowledgeClothesDeletion,
+  compressImage,
+} from "../lib/client";
 import {
   categoryLabels,
   seasonLabels,
@@ -31,16 +37,210 @@ import {
   Loading,
   Notice,
 } from "./ui";
+function DeletedClothesUndo({ onRestored }: { onRestored: () => void }) {
+  const [receipts, setReceipts] = useState<ClothesDeletionReceipt[]>([]);
+  const [elapsed, setElapsed] = useState(0);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [uncertain, setUncertain] = useState<string[]>([]);
+  const [terminal, setTerminal] = useState<string[]>([]);
+  const uncertainTokens = useRef(new Set<string>());
+  const lock = useRef(false);
+  const started = useRef(0);
+  const loadVersion = useRef(0);
+  async function load() {
+    // Include the round-trip duration so a slow response cannot extend Undo.
+    const version = ++loadVersion.current;
+    const requestedAt = performance.now();
+    try {
+      const result = await api("GET /api/clothes/deletions");
+      if (version !== loadVersion.current) return;
+      await Promise.all(
+        result.items.map((receipt) =>
+          acknowledgeClothesDeletion(receipt.clothes_id),
+        ),
+      );
+      if (version !== loadVersion.current || lock.current) return;
+      started.current = requestedAt;
+      setElapsed(performance.now() - requestedAt);
+      setReceipts((previous) => {
+        const currentTokens = new Set(
+          result.items.map((receipt) => receipt.deletion_token),
+        );
+        const unresolved = previous.filter(
+          (receipt) =>
+            uncertainTokens.current.has(receipt.deletion_token) &&
+            !currentTokens.has(receipt.deletion_token),
+        );
+        return [...result.items, ...unresolved].map((receipt) => ({
+          ...receipt,
+          server_now: result.server_now,
+        }));
+      });
+      setError("");
+    } catch (e) {
+      if (version === loadVersion.current) setError((e as Error).message);
+    }
+  }
+  useEffect(() => {
+    void load();
+    const timer = setInterval(
+      () => setElapsed(performance.now() - started.current),
+      250,
+    );
+    const refresh = () => {
+      if (document.visibilityState === "visible") {
+        void load();
+        onRestored();
+      }
+    };
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      ++loadVersion.current;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
+  async function restore(receipt: ClothesDeletionReceipt) {
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await api("POST /api/clothes/:id/restore", {
+        params: { id: receipt.clothes_id },
+        body: { deletion_token: receipt.deletion_token },
+      });
+      ++loadVersion.current;
+      uncertainTokens.current.delete(receipt.deletion_token);
+      setUncertain([...uncertainTokens.current]);
+      setReceipts((items) =>
+        items.filter((r) => r.deletion_token !== receipt.deletion_token),
+      );
+      setMessage("削除を取り消しました");
+      onRestored();
+    } catch (e) {
+      const error = e as ApiError;
+      setError(error.message);
+      if (
+        !(error instanceof ApiError) ||
+        error.status === 0 ||
+        error.status >= 500 ||
+        ["OPERATION_IN_PROGRESS", "INVALID_RESPONSE", "NETWORK_ERROR"].includes(
+          error.code,
+        )
+      ) {
+        uncertainTokens.current.add(receipt.deletion_token);
+        setUncertain([...uncertainTokens.current]);
+      } else {
+        uncertainTokens.current.delete(receipt.deletion_token);
+        setUncertain([...uncertainTokens.current]);
+        if (["UNDO_EXPIRED", "CONFLICT", "NOT_FOUND"].includes(error.code))
+          setTerminal((items) => [...items, receipt.deletion_token]);
+      }
+    } finally {
+      lock.current = false;
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      {message && <Notice kind="success">{message}</Notice>}
+      {error && (
+        <Notice kind="error">
+          {error}{" "}
+          <button
+            className="text-button"
+            disabled={busy}
+            onClick={() => {
+              void load();
+              onRestored();
+            }}
+          >
+            削除状態を再確認
+          </button>
+        </Notice>
+      )}
+      {receipts.map((receipt) => {
+        const seconds = Math.max(
+          0,
+          Math.ceil(
+            (Date.parse(receipt.undo_until) -
+              Date.parse(receipt.server_now) -
+              elapsed) /
+              1000,
+          ),
+        );
+        const pending = uncertain.includes(receipt.deletion_token);
+        const expired =
+          seconds === 0 || terminal.includes(receipt.deletion_token);
+        const label = `${receipt.color}の${categoryLabels[receipt.category]}`;
+        return (
+          <section
+            className="notice"
+            role="status"
+            aria-label={`${label}の削除`}
+            key={receipt.deletion_token}
+          >
+            <RotateCcw size={18} />
+            <div>
+              <p>{label}を削除しました。</p>
+              <p>
+                {pending ? (
+                  "取り消し結果は、期限後も確認できます。"
+                ) : expired ? (
+                  "削除を取り消せる時間を過ぎました。"
+                ) : (
+                  <span aria-live="off">{seconds}秒以内なら取り消せます。</span>
+                )}
+              </p>
+              {pending && (
+                <p>
+                  取り消し結果を確認できませんでした。もう一度押して結果を確認できます。
+                </p>
+              )}
+              <button
+                className="button secondary"
+                disabled={busy || (expired && !pending)}
+                onClick={() => void restore(receipt)}
+              >
+                <RotateCcw size={16} />
+                {pending ? "取り消し結果を確認" : "削除を取り消す"}
+              </button>
+            </div>
+          </section>
+        );
+      })}
+    </>
+  );
+}
 export function Closet() {
   const [clothes, setClothes] = useState<Cloth[]>([]);
   const [filter, setFilter] = useState("all");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  useEffect(() => {
+  const loadVersion = useRef(0);
+  function loadClothes() {
+    const version = ++loadVersion.current;
     api("GET /api/clothes")
-      .then((r) => setClothes(r.items))
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
+      .then((r) => {
+        if (version !== loadVersion.current) return;
+        setClothes(r.items);
+        setError("");
+      })
+      .catch((e) => {
+        if (version === loadVersion.current) setError(e.message);
+      })
+      .finally(() => {
+        if (version === loadVersion.current) setLoading(false);
+      });
+  }
+  useEffect(() => {
+    loadClothes();
+    return () => {
+      ++loadVersion.current;
+    };
   }, []);
   const visible = clothes.filter(
     (c) =>
@@ -64,7 +264,15 @@ export function Closet() {
           {clothes.length} / {limits.clothes}着
         </span>
       </Heading>
-      {error && <Notice kind="error">{error}</Notice>}
+      {error && (
+        <Notice kind="error">
+          {error}{" "}
+          <button className="text-button" onClick={loadClothes}>
+            一覧を再読み込み
+          </button>
+        </Notice>
+      )}
+      <DeletedClothesUndo onRestored={loadClothes} />
       <div className="filter-row">
         {[
           ["all", "すべて"],
@@ -439,6 +647,7 @@ export function ClothingDetail({ id }: { id: string }) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const actionLock = useRef(false);
   useEffect(() => {
     api("GET /api/clothes/:id", { params: { id } })
       .then((c) => {
@@ -452,12 +661,26 @@ export function ClothingDetail({ id }: { id: string }) {
           wear_limit: c.wear_limit,
         });
       })
-      .catch((e) => setError(e.message));
+      .catch(async (e) => {
+        try {
+          const result = await api("GET /api/clothes/deletions");
+          if (result.items.some((receipt) => receipt.clothes_id === id)) {
+            await acknowledgeClothesDeletion(id);
+            router.replace("/closet");
+            return;
+          }
+        } catch {
+          /* Keep the original load error and allow a later retry. */
+        }
+        setError(e.message);
+      });
   }, [id]);
   async function action(
     kind: "update" | "wash" | "delete",
     body: ClothesPatch = {},
   ) {
+    if (actionLock.current) return;
+    actionLock.current = true;
     setBusy(true);
     setError("");
     try {
@@ -476,8 +699,21 @@ export function ClothingDetail({ id }: { id: string }) {
       setCloth(c);
       setMessage("更新しました");
     } catch (e) {
+      if (kind === "delete") {
+        try {
+          const result = await api("GET /api/clothes/deletions");
+          if (result.items.some((receipt) => receipt.clothes_id === id)) {
+            await acknowledgeClothesDeletion(id);
+            router.push("/closet");
+            return;
+          }
+        } catch {
+          /* The mutation key is retained for an uncertain retry. */
+        }
+      }
       setError((e as Error).message);
     } finally {
+      actionLock.current = false;
       setBusy(false);
     }
   }
@@ -541,7 +777,8 @@ export function ClothingDetail({ id }: { id: string }) {
             {deleting ? (
               <>
                 <p>
-                  この服を削除しますか？写真も削除対象になります。手動固定の日はそのまま残り、注意を表示します。
+                  この服を削除しますか？削除後{limits.clothesUndoSeconds}
+                  秒以内ならクローゼットで取り消せます。写真も削除対象になります。手動固定の日はそのまま残り、注意を表示します。
                 </p>
                 <div className="actions">
                   <button
