@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,8 +71,10 @@ try {
     "ON_ERROR_STOP=1",
     "-f",
     "tests/database/bootstrap.sql",
-    "-f",
-    "supabase/migrations/202610110001_initial.sql",
+    ...readdirSync(join(root, "supabase/migrations"))
+      .filter((name) => name.endsWith(".sql"))
+      .sort()
+      .flatMap((name) => ["-f", join(root, "supabase/migrations", name)]),
   ]);
   const result = spawnSync(
     "pnpm",

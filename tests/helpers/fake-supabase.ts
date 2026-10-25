@@ -26,6 +26,10 @@ export function fakeDatabase(
         query.filters.push([method, column, value]);
         return chain;
       };
+    chain.or = (filter: string) => {
+      query.filters.push(["or", filter, undefined]);
+      return chain;
+    };
     for (const method of ["order", "range", "limit", "single", "maybeSingle"])
       chain[method] = () => chain;
     chain.then = (fulfilled: any, rejected: any) => {

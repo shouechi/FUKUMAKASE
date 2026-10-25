@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   clothesCreateSchema,
   clothesPatchSchema,
+  clothesRestoreSchema,
   dateSchema,
   defaultPreferences,
   limits,
@@ -700,6 +701,17 @@ export function createApp(deps: Dependencies = {}) {
       },
     });
   });
+  app.get("/api/clothes/deletions", async (c) =>
+    reply(
+      c,
+      "GET /api/clothes/deletions",
+      await result(
+        c
+          .get("admin")
+          .rpc("list_clothes_deletions", { p_user_id: c.get("userId") }),
+      ),
+    ),
+  );
   app.get("/api/clothes/:id", async (c) =>
     reply(c, "GET /api/clothes/:id", await ownCloth(c, c.req.param("id"))),
   );
@@ -730,46 +742,26 @@ export function createApp(deps: Dependencies = {}) {
     return reply(c, "PATCH /api/clothes/:id", row);
   });
   app.delete("/api/clothes/:id", async (c) => {
-    const id = idParam(c.req.param("id"));
-    const cloth = await result<any>(
-      c
-        .get("userDb")
-        .from("clothes")
-        .select("*")
-        .eq("id", id)
-        .eq("user_id", c.get("userId"))
-        .maybeSingle(),
+    const receipt = await result<any>(
+      c.get("admin").rpc("delete_clothes", {
+        p_user_id: c.get("userId"),
+        p_clothes_id: idParam(c.req.param("id")),
+        p_request_key: key(c),
+      }),
     );
-    if (!cloth) throw new ApiError("NOT_FOUND", 404, "服が見つかりません");
-    await result(
-      c
-        .get("admin")
-        .from("clothes")
-        .update({ deleted_at: c.get("now").toISOString() })
-        .eq("id", id)
-        .eq("user_id", c.get("userId")),
+    return reply(c, "DELETE /api/clothes/:id", receipt);
+  });
+  app.post("/api/clothes/:id/restore", async (c) => {
+    const data = await body(c, clothesRestoreSchema);
+    const cloth = await result<Cloth>(
+      c.get("admin").rpc("restore_clothes", {
+        p_user_id: c.get("userId"),
+        p_clothes_id: idParam(c.req.param("id")),
+        p_request_key: key(c),
+        p_deletion_token: data.deletion_token,
+      }),
     );
-    await result(
-      c
-        .get("admin")
-        .from("generation_jobs")
-        .upsert(
-          {
-            user_id: c.get("userId"),
-            job_type: "image_delete",
-            payload: { image_key: cloth.image_key },
-            dedupe_key: `image_delete:${id}`,
-            status: "pending",
-          },
-          { onConflict: "dedupe_key", ignoreDuplicates: true },
-        ),
-    );
-    await enqueueReevaluation(
-      c.get("admin"),
-      c.get("userId"),
-      jstDate(c.get("now")),
-    );
-    return reply(c, "DELETE /api/clothes/:id", { ok: true });
+    return reply(c, "POST /api/clothes/:id/restore", cloth);
   });
   app.post("/api/clothes/:id/washed", async (c) => {
     await ownCloth(c, c.req.param("id"));

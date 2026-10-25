@@ -218,6 +218,25 @@ export const clothSchema = z.object({
   last_worn_at: z.iso.datetime({ offset: true }).nullable().optional(),
 });
 export type Cloth = z.infer<typeof clothSchema>;
+export const clothesDeletionReceiptSchema = z.object({
+  ok: z.literal(true),
+  clothes_id: z.uuid(),
+  category: categorySchema,
+  color: classificationSchema.shape.color,
+  deletion_token: z.uuid(),
+  undo_until: z.iso.datetime({ offset: true }),
+  server_now: z.iso.datetime({ offset: true }),
+});
+export type ClothesDeletionReceipt = z.infer<
+  typeof clothesDeletionReceiptSchema
+>;
+export const clothesRestoreSchema = z
+  .object({ deletion_token: z.uuid() })
+  .strict();
+export const clothesDeletionsSchema = z.object({
+  items: z.array(clothesDeletionReceiptSchema),
+  server_now: z.iso.datetime({ offset: true }),
+});
 export const weatherSchema = z.object({
   date: dateSchema,
   min_c: z.number(),
@@ -347,7 +366,15 @@ export interface ApiContract {
   "GET /api/clothes": Endpoint<never, ClothesPage>;
   "GET /api/clothes/:id": Endpoint<never, Cloth>;
   "PATCH /api/clothes/:id": Endpoint<ClothesPatch, Cloth>;
-  "DELETE /api/clothes/:id": Endpoint<never, OkResponse>;
+  "GET /api/clothes/deletions": Endpoint<
+    never,
+    z.infer<typeof clothesDeletionsSchema>
+  >;
+  "DELETE /api/clothes/:id": Endpoint<never, ClothesDeletionReceipt>;
+  "POST /api/clothes/:id/restore": Endpoint<
+    z.infer<typeof clothesRestoreSchema>,
+    Cloth
+  >;
   "POST /api/clothes/:id/washed": Endpoint<Record<string, never>, Cloth>;
   "GET /api/outfits/today": Endpoint<never, Plan | null>;
   "POST /api/outfits/today/regenerate": Endpoint<
@@ -392,7 +419,9 @@ export const apiResponseSchemas = {
   "GET /api/clothes": clothesPageSchema,
   "GET /api/clothes/:id": clothSchema,
   "PATCH /api/clothes/:id": clothSchema,
-  "DELETE /api/clothes/:id": okResponseSchema,
+  "GET /api/clothes/deletions": clothesDeletionsSchema,
+  "DELETE /api/clothes/:id": clothesDeletionReceiptSchema,
+  "POST /api/clothes/:id/restore": clothSchema,
   "POST /api/clothes/:id/washed": clothSchema,
   "GET /api/outfits/today": planSchema.nullable(),
   "POST /api/outfits/today/regenerate": regeneratedPlanSchema,
@@ -410,6 +439,7 @@ export const apiResponseSchemas = {
 export type ClothesPatch = z.infer<typeof clothesPatchSchema>;
 export type ClothesCreate = z.infer<typeof clothesCreateSchema>;
 export const limits = {
+  clothesUndoSeconds: 30,
   clothes: 100,
   uploadBytes: 5 * 1024 * 1024,
   dailyRegenerations: 3,

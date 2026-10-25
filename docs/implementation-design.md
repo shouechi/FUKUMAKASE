@@ -34,6 +34,8 @@ DBは利用者への直接の変更権限を付与しない。ユーザー所有
 
 - `outfit_items` と `wear_log_items` には所有者列を追加し、親行と服の両方に `(user_id,id)` 複合外部キーを持たせる。他人の服を自分のコーデや履歴へ混入できない。服の所有者・ID・画像キーは更新トリガーでも固定する。
 - 服とアップロード予約を合わせて100枠まで。利用者の `profiles` 行をロックして並行処理を直列化する。アップロード予約は10分で失効し、登録後は消費済みになる。服の挿入・削除取消にも100着トリガーが働く。同じリクエストキーのリトライは既存の結果を返す。
+- 削除UndoはDB時刻から30秒間。`deletion_token`で世代を区別し、`undo_until`未満かつ`image_purge_started_at`未設定の場合だけ復元する。削除と復元の業務receipt・計画再評価・分類再開も同じDBトランザクションで確定する。共有期間定数は`packages/schemas`に置き、SQLの期限設定との一致を独立テストで確認する。
+- 削除後は登録枠を空け、復元時に有効な服＋有効な未使用アップロード予約が100未満であることをDBで検証する。上限なら429を返し、画面は期限内の再試行を残す。業務receiptも復元の入力世代を照合し、同じキーに別の世代を指定した再送を拒否する。
 - 計画は服の着用回数を変更しない。着用確定のみが固定スナップショットと回数を同一トランザクションで記録する。日付一意制約が二重クリックを防ぐ。訂正は差分の追加・削除と監査イベントを原子的に記録する。洗濯後に過去の履歴を訂正しても、洗濯前の回数を復活させない。
 - AI・自動保存は `manual_lock` または確定済み計画の構成を変えない。警告の更新のみ許す。DBでも存在・所有者・利用可否・NGカテゴリ・最低限の会社ルールを検証し、より詳細な季節・会社ルール・予測洗濯回数はドメイン層で判断する。
 - 手動再生成枠はAIが使えなくても消費する。日付はJSTの暦日、週はJST月曜を基準とし、対象計画の日付を変えて枠を回避できない。リトライキーの再使用では消費を増やさない。
@@ -50,6 +52,10 @@ DBは利用者への直接の変更権限を付与しない。ユーザー所有
 | `ensure_profile` | `p_user_id` → profile | Authの存在をFKで確認、初期設定・平日勤務を作成 |
 | `reserve_upload` | `p_user_id,p_request_key` → grant | `id,image_key,expires_at`、100枠の予約 |
 | `create_clothes` | `p_user_id,p_request_key,p_data` → clothes | 有効な所有者の画像予約を消費し冪等登録 |
+| `delete_clothes` | `p_user_id,p_clothes_id,p_request_key` → `{ok,clothes_id,category,color,deletion_token,undo_until,server_now}` | 論理削除、30秒の期限、世代と業務receipt、期限後の画像削除と再評価の登録 |
+| `restore_clothes` | `p_user_id,p_clothes_id,p_request_key,p_deletion_token` → clothes | 所有権・世代・期限・100枠検証、服の復元と分類/再評価再開 |
+| `list_clothes_deletions` | `p_user_id` → `{items,server_now}` | 本人の現在Undo可能な削除受付を取得 |
+| `claim_clothes_image_purge` | `p_job_id,p_lease_token` → `{image_key}`またはnull | 有効な画像削除ジョブの所有者・世代・期限を検証し、復元不能な削除開始を確定 |
 | `save_plan` | `p_user_id,p_target_date,p_data,p_manual=false,p_job_id=null,p_lease_token=null` → plan＋outfit＋items | 自動上書き保護、服検証、スナップショット作成、ジョブ保存のリース検証 |
 | `complete_classification` | `p_user_id,p_clothes_id,p_data,p_job_id,p_lease_token` → clothes | pending服だけ分類し、途中の利用者編集を保護 |
 | `claim_operation` | `p_user_id,p_operation,p_request_key,p_hash` → `{state,response?,status?}` | HTTP変更操作の本文ハッシュ一致・並行リトライ排他 |
@@ -74,6 +80,8 @@ DBは利用者への直接の変更権限を付与しない。ユーザー所有
 
 R2とDBに分散トランザクションはない。PUT直後の利用者確認が失敗した場合は画像を補償削除し、プロセス停止で補償処理自体が動かない場合に備えてCronが画像を100件ずつ走査する。service-only・RLS有効の `maintenance_state(key,cursor,updated_at)` に進捗を持ち、利用者不在/退会中の画像と、1時間以上経過し服・有効予約に参照されない画像を回収する。DBが不明なときは削除しない。退会の完了receiptと遅延したPUTの間に原子的なバリアがあるわけではなく、孤児は後続の走査周期で最終的に除去する。実R2で停止・遅延を注入した検証は公開前ゲートに含む。
 
+服の画像削除では、先に`claim_clothes_image_purge`がprofile・服・ジョブをロックして削除開始を確定する。R2削除はその後に実行し、不在確認まで再試行する。復元が先なら旧世代ジョブは何も削除せず、削除開始が先なら復元を拒否する。孤児清掃は`image_purge_started_at`未設定の削除服も参照中とみなし、期限切れとR2削除の間に復元との競合を作らない。削除世代・期限のない導入前の削除行は復元対象外とし、旧形式ジョブもDBで現在の所有権・削除状態を確認してから回収する。旧Workerとの混在を防ぐ切替条件は正本06に記載する。
+
 ## 元設計との対応・必要な証拠
 
 | 元要件 | 実装箇所／検証すべき証拠 |
@@ -84,6 +92,7 @@ R2とDBに分散トランザクションはない。PUT直後の利用者確認�
 | 写真1着・圧縮・構図保持・EXIF削除 | ブラウザ変換、WebP実体検査、非公開R2統合検証 |
 | AI分類・自動保存・手修正 | classifyジョブ、構造化出力検証、AI停止時の手動導線 |
 | 100着・並行・リトライ | SQL予約/登録RPC＋別接続の競合テスト |
+| 誤削除のUndo | DB期限・削除世代・冪等receipt、復元/画像削除/登録/退会の競合と権限テスト、孤児清掃保護、画面の更新後復元・残秒・失敗時再試行。実R2の保持と削除は公開前に別途検証 |
 | 私服勤務NG・利用不可・未知ID拒否 | ドメイン単体、API入力、DB confirm検証 |
 | 今日1コーデ・理由1行・不足表示 | Today画面、2着・未登録靴・アウターの統合テスト |
 | 初週・日曜翌週・朝指定時刻 | scheduler日時境界・リース・dedupeテスト、Workers実Cron検証 |

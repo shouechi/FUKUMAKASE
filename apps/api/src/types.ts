@@ -74,6 +74,20 @@ export async function result<T = any>(
         403,
         "アカウントを利用できません",
       );
+    if (/UNDO_EXPIRED/.test(msg))
+      throw new ApiError("UNDO_EXPIRED", 409, "取り消せる時間を過ぎました");
+    if (/DELETION_CONFLICT/.test(msg))
+      throw new ApiError(
+        "CONFLICT",
+        409,
+        "服の削除状態が変わりました。再読み込みしてください",
+      );
+    if (/CLOTHES_LIMIT/.test(msg))
+      throw new ApiError(
+        "LIMIT_REACHED",
+        429,
+        "服と登録予約が100着分あります。空きを作ってから再試行してください",
+      );
     if (/LIMIT|QUOTA|CAP|RATE/.test(msg))
       throw new ApiError("LIMIT_REACHED", 429, "利用上限に達しました");
     if (/NOT_FOUND/.test(msg))

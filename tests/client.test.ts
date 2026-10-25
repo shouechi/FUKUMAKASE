@@ -296,6 +296,33 @@ describe("mutation uncertainty", () => {
     await mutate();
     expect(keyAt(1)).not.toBe(keyAt(0));
   });
+
+  test("server-confirmed deletion clears only the current owner's pending DELETE key", async () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const anotherId = "22222222-2222-4222-8222-222222222222";
+    const firstOwner = auth.session!;
+    const remove = (clothId: string) =>
+      client.api("DELETE /api/clothes/:id", { params: { id: clothId } });
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    await expectSafeFailure(remove(id)); // A's pending deletion
+    await expectSafeFailure(remove(anotherId)); // A's unrelated deletion
+    auth.session = {
+      ...firstOwner,
+      user: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" },
+    };
+    await expectSafeFailure(remove(id)); // B's pending deletion
+    await client.acknowledgeClothesDeletion(id);
+    await expectSafeFailure(remove(id));
+    expect(keyAt(3)).not.toBe(keyAt(2));
+    auth.session = firstOwner;
+    await expectSafeFailure(remove(id));
+    expect(keyAt(4)).toBe(keyAt(0));
+    await client.acknowledgeClothesDeletion(id);
+    await expectSafeFailure(remove(id));
+    expect(keyAt(5)).not.toBe(keyAt(0));
+    await expectSafeFailure(remove(anotherId));
+    expect(keyAt(6)).toBe(keyAt(1));
+  });
 });
 
 describe("private image response boundary", () => {

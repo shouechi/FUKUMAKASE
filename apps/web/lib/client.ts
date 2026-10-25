@@ -13,6 +13,27 @@ export { jstDate as todayJst, addDays as shiftDate } from "@outfit/domain";
 let client: SupabaseClient | undefined;
 // A failed network response leaves the mutation uncertain, so retries reuse its key.
 const pendingMutations = new Map<string, string>();
+function mutationFingerprint(
+  userId: string | undefined,
+  method: string,
+  path: string,
+  body: string = "",
+) {
+  return `${userId}:${method}:${path}:${body}`;
+}
+/** Call only after the authenticated deletions list confirms this deletion. */
+export async function acknowledgeClothesDeletion(id: string): Promise<void> {
+  const auth = authClient();
+  const session = auth ? (await auth.auth.getSession()).data.session : null;
+  if (!session) return;
+  pendingMutations.delete(
+    mutationFingerprint(
+      session.user.id,
+      "DELETE",
+      `/api/clothes/${encodeURIComponent(id)}`,
+    ),
+  );
+}
 export function authClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -117,7 +138,7 @@ async function request<K extends ApiEndpoint>(
   const mutation = !["GET", "HEAD"].includes(method);
   const fingerprint =
     mutation && typeof options.body !== "object"
-      ? `${userId}:${method}:${path}:${options.body ?? ""}`
+      ? mutationFingerprint(userId, method, path, options.body ?? "")
       : null;
   if (mutation && !headers.has("Idempotency-Key")) {
     const key =

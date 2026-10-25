@@ -103,6 +103,33 @@ describe.skipIf(process.env.RUN_LOCAL_HTTP_INTEGRATION!=='1')('real local GoTrue
     const washed=await call(0,`/api/clothes/${clothes[0].id}/washed`,'POST',{});
     expect(washed.status).toBe(200);expect(await washed.json()).toMatchObject({wears_since_wash:0});
   });
+  test('clothing Undo uses the real JWT owner, transactional RPC and reload receipt without resetting laundry',async()=>{
+    const owner=credentials[0].id,request=randomUUID();
+    const upload=await rpc('reserve_upload',{p_user_id:owner,p_request_key:request});
+    const cloth=await rpc('create_clothes',{p_user_id:owner,p_request_key:request,p_data:{image_key:upload.image_key,category:'top',color:'white',wear_limit:3,classification_state:'manual'}});
+    const patched=await admin.from('clothes').update({state:'laundry',wears_since_wash:2,is_available:false}).eq('id',cloth.id);
+    expect(patched.error).toBeNull();
+    const removed=await call(0,`/api/clothes/${cloth.id}`,'DELETE');
+    expect(removed.status,JSON.stringify(await removed.clone().json())).toBe(200);
+    const receipt=await removed.json();
+    expect(receipt).toMatchObject({ok:true,clothes_id:cloth.id,category:'top',color:'white'});
+    expect(Date.parse(receipt.undo_until)-Date.parse(receipt.server_now)).toBe(30_000);
+    expect((await call(0,`/api/clothes/${cloth.id}`)).status).toBe(404);
+    const recovered=await call(0,'/api/clothes/deletions');
+    expect(recovered.status).toBe(200);
+    expect((await recovered.json()).items).toContainEqual(expect.objectContaining({clothes_id:cloth.id,deletion_token:receipt.deletion_token}));
+    expect((await (await call(1,'/api/clothes/deletions')).json()).items).toEqual([]);
+    expect((await call(1,`/api/clothes/${cloth.id}/restore`,'POST',{deletion_token:receipt.deletion_token})).status).toBe(404);
+    expect((await client(credentials[0].token).rpc('restore_clothes',{p_user_id:owner,p_clothes_id:cloth.id,p_request_key:randomUUID(),p_deletion_token:receipt.deletion_token})).error).not.toBeNull();
+    const restored=await call(0,`/api/clothes/${cloth.id}/restore`,'POST',{deletion_token:receipt.deletion_token});
+    expect(restored.status,JSON.stringify(await restored.clone().json())).toBe(200);
+    expect(await restored.json()).toMatchObject({id:cloth.id,state:'laundry',wears_since_wash:2,is_available:false});
+    expect((await (await call(0,'/api/clothes/deletions')).json()).items).toEqual([]);
+    const next=await (await call(0,`/api/clothes/${cloth.id}`,'DELETE')).json();
+    expect(next.deletion_token).not.toBe(receipt.deletion_token);
+    expect((await call(0,`/api/clothes/${cloth.id}/restore`,'POST',{deletion_token:receipt.deletion_token})).status).toBe(409);
+    expect((await call(0,`/api/clothes/${cloth.id}/restore`,'POST',{deletion_token:next.deletion_token})).status).toBe(200);
+  });
   test('tombstone immediately blocks valid sessions and Auth deletion blocks the still-unexpired JWT',async()=>{
     const job=await rpc('begin_deletion',{p_user_id:credentials[1].id});
     expect((await call(1,'/api/me/preferences')).status).toBe(403);
